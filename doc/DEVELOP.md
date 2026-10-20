@@ -8,6 +8,7 @@
 | `src/client.tsx` | Browser half: the settings page (slot registration + component). |
 | `src/client-locales.ts` | `en`/`zh` dictionaries and the `Translate` type. |
 | `src/client-styles.ts` | The page's `css` template string (BEM classes, host theme tokens only). |
+| `src/role-remote.ts` | Role catalogue reader: mounts the native `satelliteRoles.describe()` Typert Remote contribution and returns its versioned JSON value. |
 | `doc/` | This development document; source-only, not part of the published package. |
 | `lib/` | Build output — generated, never edited by hand, not meant to be committed. |
 
@@ -30,6 +31,14 @@ The README covers what a user sees; these are the implementation details behind 
   stale draft cannot bypass it.
 - Saving uses the revision captured when editing began. When no explicit routes remain,
   the page uses the native `unset` operation; other settings are not rewritten.
+- The section shows one tab per namespace the Host actually serves (`roles` for
+  `satellite-node`, `android` for `satellite-android`); a plugin that serves none
+  contributes no tab. Inside a tab, roles render as one card each: the card head holds the
+  label, role id and an origin badge (declared, override, inherited or deployment default),
+  the card body holds provider/model, and the card footer holds the per-role actions, which
+  the stylesheet hides when empty. Android execution settings use the same field grid:
+  three `fieldset` groups (enable/privacy, paths, limits), two columns once the section
+  itself is at least 560px wide (a container query, not the viewport width).
 
 ## Check a change
 
@@ -66,19 +75,34 @@ neither the npm tarball nor the `main` artifact branch.
   `packages[""].version` entry, and must be stable or prerelease SemVer without build
   metadata.
 
-### First deployment
+### Version bump
 
-1. Push the current work as the `source` branch and let the `check` workflow pass on the
-   commit to be tagged. The release workflow reads `.github/workflows/release.yml` from
-   that commit, so the tag must include it.
-2. Create and push the first stable tag (`v0.1.0`). Pushing the tag is what triggers the
-   workflow; a local tag alone does nothing.
-3. When `main` does not exist yet (the expected first deployment), the first stable
-   release creates it. That first artifact commit has no parent and contains only the nine
-   package files plus `.release.json`; later stable releases append to it.
-4. After the first stable release, an administrator switches the repository's default
-   branch to `main`, so installers that read the default branch receive the published
-   package rather than the source tree.
+Update the same three fields in one commit: `version` in `package.json`, and the top-level
+`version` plus `packages[""].version` in `package-lock.json`. A hand edit of those fields is
+enough; running `npm install --package-lock-only` after changing `package.json` is an
+alternative, so check its diff if you use it. The release workflow compares the pushed tag
+`v<version>` against all three values, so a local bump without a matching tag publishes
+nothing. A UI-only bump leaves dependency and peer ranges unchanged.
+
+### Release procedure
+
+Publishing is a separate maintainer step taken after the change is reviewed; the order
+below is what a release run requires, not something that local work performs.
+
+1. Push the source branch and let the `check` workflow pass on the commit to be tagged.
+   The release workflow reads `.github/workflows/release.yml` from that commit, so the tag
+   must include it.
+2. Create and push the release tag `v<version>`, matching the `version` in `package.json`
+   for that release. The workflow compares the tag against `package.json` and both
+   lockfile versions, so any other tag fails the version check. Pushing the tag is what
+   triggers the workflow; a local tag alone does nothing.
+3. An ordinary stable release appends its artifact commit to the existing `main` branch
+   as a fast-forward, so `main` stays the latest published package.
+4. Only an initial deployment — one where `main` does not exist yet — creates `main` with
+   a parentless artifact commit containing the nine package files plus `.release.json`.
+   That case also needs an administrator to switch the repository's default branch to
+   `main`, so installers that read the default branch receive the published package rather
+   than the source tree.
 
 ### Permissions and protection
 
@@ -113,8 +137,10 @@ synchronization failed, rerun the workflow — it downloads the already publishe
 partially created Release is missing the asset, inspect and repair or remove it before
 retrying.
 
-The local checkout has no `.git` directory, so this flow is described but has not been run
-from this workspace: no initialization, push, tag or release is performed here.
+Local preparation and local commits never create a tag, push a branch or publish a
+release: those are maintainer actions belonging to the release step above. The workflow
+runs only when a matching tag is pushed, so working in a checkout of this source tree
+tags, pushes and publishes nothing by itself.
 
 ## Version range
 
