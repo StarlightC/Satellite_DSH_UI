@@ -58,6 +58,9 @@ export const en = {
   androidTitle: 'Android execution (local)',
   androidIntro:
     'Local Android tools run in this session sandbox: project facts, build/test, device, emulator, journey and capture. These values are machine-specific and are saved in this profile, not in the project repository.',
+  androidGroupEnable: 'Enablement and privacy',
+  androidGroupPaths: 'Tool paths',
+  androidGroupLimits: 'Connection and limits',
   androidEnabled: 'Enable local Android execution',
   androidEnabledHint: 'When off, the Android tools are registered but refuse to run.',
   androidCli: 'Android CLI path',
@@ -142,6 +145,9 @@ export const zh: Record<keyof typeof en, string> = {
   androidTitle: 'Android 本地执行',
   androidIntro:
     '本地 Android 工具在本次会话沙箱里运行：项目事实、构建/测试、设备、模拟器、UI 旅程与采集。这些路径属于本机配置，保存在 profile，不会进入项目仓库。',
+  androidGroupEnable: '启用与隐私',
+  androidGroupPaths: '工具路径',
+  androidGroupLimits: '连接与限制',
   androidEnabled: '启用本地 Android 执行',
   androidEnabledHint: '关闭时这些工具仍会注册，但拒绝执行。',
   androidCli: 'Android CLI 路径',

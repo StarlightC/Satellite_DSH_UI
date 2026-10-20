@@ -655,53 +655,50 @@ function SatelliteRoutesSection(
           </button>
         : null}
     </div>
-    <table className="satellite-ui__table">
-      <thead>
-        <tr>
-          <th className="satellite-ui__head" scope="col">{t('role')}</th>
-          <th className="satellite-ui__head" scope="col">{t('provider')}</th>
-          <th className="satellite-ui__head" scope="col">{t('model')}</th>
-          <th className="satellite-ui__head" scope="col">{t('origin')}</th>
-          <th className="satellite-ui__head" scope="col">{t('cleanup')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => {
-          const field = (name: 'role' | 'provider' | 'model') => `${fresh}-${index}-${name}`
-          const providers = providerOptions()
-          const modelsForRow = modelOptions(row)
-          const definition = roleDefinition(row.role)
-          const orphan = metadataReady && definition === undefined
-          const editable = definition !== undefined && !busy
-          const origin = !metadataReady ? 'unverified' : orphan ? 'orphan' : 'declared'
-          const originLabel = !metadataReady ? t('bindingsUnverified') : orphan ? t('orphan') : t('originDeclared')
-          return <tr className="satellite-ui__row" data-state={origin} key={index}>
-            <td className="satellite-ui__cell">
-              <span className="satellite-ui__role">{definition?.label ?? row.role}</span>
-              {definition ? <>
-                <code className="satellite-ui__role-id">{row.role}</code>
-                <p className="satellite-ui__description">{definition.description}</p>
-                <details className="satellite-ui__details">
-                  <summary>{t('roleDetails')}</summary>
-                  <p className="satellite-ui__notice">{t('roleScopeNotice')}</p>
+    <ul className="satellite-ui__roles" aria-label={t('title')}>
+      {rows.map((row, index) => {
+        const field = (name: 'role' | 'provider' | 'model') => `${fresh}-${index}-${name}`
+        const providers = providerOptions()
+        const modelsForRow = modelOptions(row)
+        const definition = roleDefinition(row.role)
+        const orphan = metadataReady && definition === undefined
+        const editable = definition !== undefined && !busy
+        const origin = !metadataReady ? 'unverified' : orphan ? 'orphan' : 'declared'
+        const originLabel = !metadataReady ? t('bindingsUnverified') : orphan ? t('orphan') : t('originDeclared')
+        const originDetail = row.explicit
+          ? t('originOverride')
+          : routeEntries(snapshot.base ?? {}).some((entry) => entry.role === row.role) ? t('inherited') : t('deploymentDefault')
+        return <li className="satellite-ui__role-card" data-state={origin} data-role={row.role} key={index}>
+          <div className="satellite-ui__card-head">
+            <div className="satellite-ui__card-identity">
+              <h3 className="satellite-ui__role">{definition?.label ?? row.role}</h3>
+              {definition ? <code className="satellite-ui__role-id">{row.role}</code> : null}
+            </div>
+            <span className="satellite-ui__badge" data-state={origin}>{originLabel} · {originDetail}</span>
+          </div>
+          {definition ? <>
+            <p className="satellite-ui__description">{definition.description}</p>
+            <details className="satellite-ui__details">
+              <summary>{t('roleDetails')}</summary>
+              <p className="satellite-ui__notice">{t('roleScopeNotice')}</p>
+              <dl className="satellite-ui__metadata">
+                <dt>{t('skill')}</dt><dd>{definition.skill ?? t('notProvided')}</dd>
+                <dt>{t('sandbox')}</dt><dd><code>{definition.sandbox}</code></dd>
+              </dl>
+              {definition.bindings.length === 0 ? <p className="satellite-ui__notice">{t('noBindings')}</p> :
+                <ul className="satellite-ui__bindings">{definition.bindings.map((binding, bindingIndex) => <li key={bindingIndex}>
+                  <strong>{binding.node} · {binding.phase}</strong>
                   <dl className="satellite-ui__metadata">
-                    <dt>{t('skill')}</dt><dd>{definition.skill ?? t('notProvided')}</dd>
-                    <dt>{t('sandbox')}</dt><dd><code>{definition.sandbox}</code></dd>
+                    {binding.extension !== undefined ? <><dt>{t('extension')}</dt><dd>{binding.extension}</dd></> : null}
+                    {binding.skill !== undefined ? <><dt>{t('skill')}</dt><dd>{binding.skill}</dd></> : null}
+                    {binding.objective !== undefined ? <><dt>{t('objective')}</dt><dd>{binding.objective}</dd></> : null}
+                    <dt>{t('condition')}</dt><dd><code>{binding.condition}</code></dd>
                   </dl>
-                  {definition.bindings.length === 0 ? <p className="satellite-ui__notice">{t('noBindings')}</p> :
-                    <ul className="satellite-ui__bindings">{definition.bindings.map((binding, bindingIndex) => <li key={bindingIndex}>
-                      <strong>{binding.node} · {binding.phase}</strong>
-                      <dl className="satellite-ui__metadata">
-                        {binding.extension !== undefined ? <><dt>{t('extension')}</dt><dd>{binding.extension}</dd></> : null}
-                        {binding.skill !== undefined ? <><dt>{t('skill')}</dt><dd>{binding.skill}</dd></> : null}
-                        {binding.objective !== undefined ? <><dt>{t('objective')}</dt><dd>{binding.objective}</dd></> : null}
-                        <dt>{t('condition')}</dt><dd><code>{binding.condition}</code></dd>
-                      </dl>
-                    </li>)}</ul>}
-                </details>
-              </> : <p className="satellite-ui__notice" data-state="missing">{originLabel}</p>}
-            </td>
-            <td className="satellite-ui__cell">
+                </li>)}</ul>}
+            </details>
+          </> : <p className="satellite-ui__notice" data-state="missing">{originLabel}</p>}
+          <div className="satellite-ui__fields">
+            <div className="satellite-ui__field">
               <label className="satellite-ui__label" htmlFor={field('provider')}>{t('provider')}</label>
               {!definition ? <span className="satellite-ui__raw-model">{row.provider || t('unset')}</span> : selectable
                 ? <select className="satellite-ui__input satellite-ui__select" id={field('provider')}
@@ -712,8 +709,8 @@ function SatelliteRoutesSection(
                 : <input className="satellite-ui__input" id={field('provider')} value={row.provider}
                     placeholder="deepseek-official" spellCheck={false} autoComplete="off" disabled={busy}
                     onChange={(event) => update(index, 'provider', event.target.value)} />}
-            </td>
-            <td className="satellite-ui__cell">
+            </div>
+            <div className="satellite-ui__field">
               <label className="satellite-ui__label" htmlFor={field('model')}>{t('model')}</label>
               {!definition ? <span className="satellite-ui__raw-model">{row.model || t('unset')}</span> : selectable
                 ? <select className="satellite-ui__input satellite-ui__select" id={field('model')}
@@ -724,23 +721,20 @@ function SatelliteRoutesSection(
                 : <input className="satellite-ui__input" id={field('model')} value={row.model}
                     placeholder="deepseek-flash" spellCheck={false} autoComplete="off" disabled={busy}
                     onChange={(event) => update(index, 'model', event.target.value)} />}
-            </td>
-            <td className="satellite-ui__cell">
-              <span className="satellite-ui__badge" data-state={origin}>{originLabel} · {row.explicit ? t('originOverride') : routeEntries(snapshot.base ?? {}).some((entry) => entry.role === row.role) ? t('inherited') : t('deploymentDefault')}</span>
-              {definition && row.explicit ? <button className="satellite-ui__button" type="button" disabled={busy} onClick={() => reset(index)}>{t('inherit')}</button> : null}
-            </td>
-            <td className="satellite-ui__cell">
-              {orphan && row.explicit
-                ? <button className="satellite-ui__button satellite-ui__button--quiet" type="button" disabled={busy}
-                    aria-label={`${t('cleanup')} ${row.role}`}
-                    onClick={() => remove(index)}>{t('cleanup')}</button>
-                : definition ? <span className="satellite-ui__badge" data-state="fixed">{t('fixed')}</span> : null}
-            </td>
-          </tr>
-        })}
-      </tbody>
-    </table>
-    <div className="satellite-ui__actions">
+            </div>
+          </div>
+          <div className="satellite-ui__actions">
+            {definition && row.explicit ? <button className="satellite-ui__button" type="button" disabled={busy} onClick={() => reset(index)}>{t('inherit')}</button> : null}
+            {orphan && row.explicit
+              ? <button className="satellite-ui__button satellite-ui__button--quiet" type="button" disabled={busy}
+                  aria-label={`${t('cleanup')} ${row.role}`}
+                  onClick={() => remove(index)}>{t('cleanup')}</button>
+              : definition ? <span className="satellite-ui__badge" data-state="fixed">{t('fixed')}</span> : null}
+          </div>
+        </li>
+      })}
+    </ul>
+    <div className="satellite-ui__actions satellite-ui__actions--footer">
       <button className="satellite-ui__button satellite-ui__button--primary" type="button" disabled={busy || !metadataReady || duplicate || snapshot?.writable !== true || models.status === 'loading'}
         onClick={() => { if (metadataReady && !busy && models.status !== 'loading' && !duplicate) void write(payload(), draft === undefined ? snapshot?.revision : draftRevision.current) }}>{busy ? t('saving') : t('save')}</button>
       <button className="satellite-ui__button" type="button" disabled={busy || draft === undefined}
@@ -1082,34 +1076,40 @@ function AndroidExecutionSection(
         : null
 
   const fieldId = (field: ExecutionField) => `${fresh}-${field}`
-  const textInput = (field: ExecutionField, labelKey: Parameters<Translate>[0]) => [
-    <label className="satellite-ui__label" htmlFor={fieldId(field)} key={`${field}-label`}>{t(labelKey)}</label>,
-    <input className="satellite-ui__input" key={`${field}-input`} id={fieldId(field)} data-field={field}
-      value={String(current[field])} spellCheck={false} autoComplete="off"
-      placeholder={t('androidEmpty')} disabled={busy}
-      onChange={(event) => edit(field, event.target.value)} />,
-  ]
-  const numberInput = (field: NumberField, labelKey: Parameters<Translate>[0]) => [
-    <label className="satellite-ui__label" htmlFor={fieldId(field)} key={`${field}-label`}>{t(labelKey)}</label>,
-    <input className="satellite-ui__input" key={`${field}-input`} id={fieldId(field)} data-field={field}
-      inputMode="numeric" value={String(current[field])} spellCheck={false} autoComplete="off"
-      placeholder={`${NUMBER_FIELDS[field][0]}–${NUMBER_FIELDS[field][1]}`} disabled={busy}
-      onChange={(event) => edit(field, event.target.value)} />,
-  ]
+  const textInput = (field: ExecutionField, labelKey: Parameters<Translate>[0]) =>
+    <div className="satellite-ui__field">
+      <label className="satellite-ui__label" htmlFor={fieldId(field)}>{t(labelKey)}</label>
+      <input className="satellite-ui__input" id={fieldId(field)} data-field={field}
+        value={String(current[field])} spellCheck={false} autoComplete="off"
+        placeholder={t('androidEmpty')} disabled={busy}
+        onChange={(event) => edit(field, event.target.value)} />
+    </div>
+  const numberInput = (field: NumberField, labelKey: Parameters<Translate>[0]) =>
+    <div className="satellite-ui__field">
+      <label className="satellite-ui__label" htmlFor={fieldId(field)}>{t(labelKey)}</label>
+      <input className="satellite-ui__input" id={fieldId(field)} data-field={field}
+        inputMode="numeric" value={String(current[field])} spellCheck={false} autoComplete="off"
+        placeholder={`${NUMBER_FIELDS[field][0]}–${NUMBER_FIELDS[field][1]}`} disabled={busy}
+        onChange={(event) => edit(field, event.target.value)} />
+    </div>
 
   return <div className="satellite-ui">
     {header}
-    <div className="satellite-ui__catalog">
-      <label className="satellite-ui__label" htmlFor={fieldId('enabled')}>
-        <input id={fieldId('enabled')} data-field="enabled" type="checkbox" checked={current.enabled === true}
-          disabled={busy} onChange={(event) => edit('enabled', event.target.checked)} /> {t('androidEnabled')}
-      </label>
-      <span className="satellite-ui__notice">{t('androidEnabledHint')}</span>
-    </div>
-    <table className="satellite-ui__table">
-      <tbody>
-        <tr className="satellite-ui__row">
-          <td className="satellite-ui__cell">
+    <div className="satellite-ui__groups">
+      <fieldset className="satellite-ui__group">
+        <legend className="satellite-ui__group-title">{t('androidGroupEnable')}</legend>
+        <div className="satellite-ui__group-body">
+          <div className="satellite-ui__field satellite-ui__field--check">
+            <label className="satellite-ui__label" htmlFor={fieldId('enabled')}>
+              <input id={fieldId('enabled')} data-field="enabled" type="checkbox" checked={current.enabled === true}
+                disabled={busy} onChange={(event) => edit('enabled', event.target.checked)} /> {t('androidEnabled')}
+            </label>
+            <span className="satellite-ui__notice">{t('androidEnabledHint')}</span>
+            <span className="satellite-ui__badge">
+              {t('androidEffective')} {reading.effective.enabled === true ? t('androidOn') : t('androidOff')}
+            </span>
+          </div>
+          <div className="satellite-ui__field">
             <label className="satellite-ui__label" htmlFor={fieldId('privacy')}>{t('androidPrivacy')}</label>
             <select className="satellite-ui__input satellite-ui__select" id={fieldId('privacy')} data-field="privacy"
               value={String(current.privacy)} disabled={busy}
@@ -1117,37 +1117,34 @@ function AndroidExecutionSection(
               <option value="">{t('androidPrivacyUnset')}</option>
               {PRIVACY_VALUES.map((value) => <option key={value} value={value}>{t(value === 'verified-disabled' ? 'androidPrivacyVerifiedDisabled' : 'androidPrivacyOptIn')}</option>)}
             </select>
-          </td>
-          <td className="satellite-ui__cell">{textInput('androidCli', 'androidCli')}</td>
-        </tr>
-        <tr className="satellite-ui__row">
-          <td className="satellite-ui__cell">{textInput('adbPath', 'androidAdb')}</td>
-          <td className="satellite-ui__cell">{textInput('emulatorPath', 'androidEmulator')}</td>
-        </tr>
-        <tr className="satellite-ui__row">
-          <td className="satellite-ui__cell">{textInput('avdmanagerPath', 'androidAvdmanager')}</td>
-          <td className="satellite-ui__cell">{textInput('javaHome', 'androidJavaHome')}</td>
-        </tr>
-        <tr className="satellite-ui__row">
-          <td className="satellite-ui__cell">{textInput('serverEndpoint', 'androidServerEndpoint')}</td>
-          <td className="satellite-ui__cell">{numberInput('operationTimeoutMs', 'androidTimeout')}</td>
-        </tr>
-        <tr className="satellite-ui__row">
-          <td className="satellite-ui__cell">{numberInput('outputMaxBytes', 'androidOutput')}</td>
-          <td className="satellite-ui__cell">
-            <span className="satellite-ui__badge">
-              {t('androidEffective')} {reading.effective.enabled === true ? t('androidOn') : t('androidOff')}
-            </span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+          </div>
+        </div>
+      </fieldset>
+      <fieldset className="satellite-ui__group">
+        <legend className="satellite-ui__group-title">{t('androidGroupPaths')}</legend>
+        <div className="satellite-ui__group-body">
+          {textInput('androidCli', 'androidCli')}
+          {textInput('adbPath', 'androidAdb')}
+          {textInput('emulatorPath', 'androidEmulator')}
+          {textInput('avdmanagerPath', 'androidAvdmanager')}
+          {textInput('javaHome', 'androidJavaHome')}
+        </div>
+      </fieldset>
+      <fieldset className="satellite-ui__group">
+        <legend className="satellite-ui__group-title">{t('androidGroupLimits')}</legend>
+        <div className="satellite-ui__group-body">
+          {textInput('serverEndpoint', 'androidServerEndpoint')}
+          {numberInput('operationTimeoutMs', 'androidTimeout')}
+          {numberInput('outputMaxBytes', 'androidOutput')}
+        </div>
+      </fieldset>
+    </div>
     <p className="satellite-ui__notice">{t('androidMachineHint')}</p>
     {warnings.length > 0
       ? <p className="satellite-ui__notice" data-state="missing" role="status">{t('androidPathWarning')}: {warnings.join(', ')}</p>
       : null}
     {error ? <p className="satellite-ui__error" role="alert">{error}</p> : null}
-    <div className="satellite-ui__actions">
+    <div className="satellite-ui__actions satellite-ui__actions--footer">
       <button className="satellite-ui__button satellite-ui__button--primary" type="button"
         disabled={busy || error !== undefined || !changed}
         onClick={() => { if (error === undefined && changed) void write(plan.ops, draft === undefined ? snapshot.revision : draftRevision.current) }}>

@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { bodyRows, createHarness, findAll, findOne, text } from './render.mjs'
+import { createHarness, findAll, text } from './render.mjs'
 
 /** 本包根目录（test/ 的上一级）。 */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -287,6 +287,8 @@ async function mount({ configForms, remote } = {}, { trigger = true, readRoles =
   return { harness, face, registrations, tree: () => harness.tree }
 }
 
+/** 角色卡片：角色列表是 `<ul>`，每行一张带 `data-role` 的 `<li>`（取代原来的表格行）。 */
+const roleCards = (tree) => findAll(tree, 'li').filter((node) => node.props?.['data-role'] !== undefined)
 const removeButtons = (tree) => findAll(tree, 'button').filter((node) => text(node) === 'satellite-ui:cleanup')
 const buttons = (tree) => findAll(tree, 'button')
 const buttonByText = (tree, value) => buttons(tree).find((node) => text(node) === value)
@@ -464,7 +466,7 @@ test('有效目录定义角色，旧 declaredRoles 不能阻止孤儿 routes 清
   }
   const state = settingsHost(value)
   const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => rolesCatalog('validation') })
-  const rows = bodyRows(app.tree())
+  const rows = roleCards(app.tree())
   assert.equal(rows.length, 2)
   assert.equal(removeButtons(rows[0]).length, 0)
   assert.equal(removeButtons(rows[1]).length, 1)
@@ -587,7 +589,7 @@ test('空选项按未配置保存：该行不写入 routes', async () => {
 test('缺少 declaredRoles 仍由权威目录展示角色与只读名称', async () => {
   const value = { routes: [DEFAULT_VALUE.routes[0]], roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } } }
   const app = await mount({ configForms: settingsHost(value).configForms, remote: catalogRemote })
-  const rows = bodyRows(app.tree())
+  const rows = roleCards(app.tree())
   assert.equal(rows.length, 2)
   assert.ok(text(rows[0]).includes('Friendly validation'))
   assert.ok(text(rows[1]).includes('Responsibility for android-context'))
@@ -606,7 +608,7 @@ test('目录调用抛错时降级为文本输入，页面仍完整渲染', async
   assert.equal(inputs.length, 4, '两行仍是 provider + model 两个文本输入')
   assert.equal(inputs[0].props.value, 'deepseek-official')
   assert.ok(text(tree).includes('satellite-ui:catalogFailed'))
-  assert.ok(findOne(tree, 'table') !== undefined, '表格与其余内容都还在')
+  assert.ok(roleCards(tree).length > 0, '角色卡片与其余内容都还在')
 })
 
 test('remote 服务缺失或没有 modelCatalog 时同样降级为文本输入', async () => {
@@ -663,7 +665,7 @@ test('插件角色没有新增入口，任何角色名都不可编辑', async ()
   const app = await mount({ configForms: settingsHost(value).configForms, remote: catalogRemote })
   assert.equal(buttonByText(app.tree(), 'satellite-ui:add'), undefined)
   assert.equal(findAll(app.tree(), 'input').length, 0)
-  const rows = bodyRows(app.tree())
+  const rows = roleCards(app.tree())
   assert.equal(rows.length, 3)
   assert.equal(removeButtons(rows[0]).length, 0)
   assert.equal(removeButtons(rows[1]).length, 0)
@@ -675,17 +677,39 @@ test('插件角色没有新增入口，任何角色名都不可编辑', async ()
 test('固定行的 provider/model 初值取自 routes', async () => {
   const { configForms } = settingsHost(DEFAULT_VALUE)
   const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
-  const rows = bodyRows(app.tree())
+  const rows = roleCards(app.tree())
   const [provider, model] = findAll(rows[1], 'select')
   assert.equal(provider.props.value, 'deepseek-official')
   assert.equal(model.props.value, 'deepseek-v4-pro')
   assert.ok(text(rows[1]).includes('android-context'))
 })
 
+test('角色列表是卡片：一个角色一张，名称/来源/说明在头部，字段区仍是带标签的 provider/model', async () => {
+  const value = { ...DEFAULT_VALUE, routes: [...DEFAULT_VALUE.routes, { role: 'legacy', provider: 'p', model: 'm' }] }
+  const app = await mount({ configForms: settingsHost(value).configForms, remote: catalogRemote })
+  const tree = app.tree()
+  assert.equal(findAll(tree, 'table').length, 0, '不再有表格布局')
+  const cards = roleCards(tree)
+  assert.deepEqual(cards.map((card) => card.props['data-role']), ['validation', 'android-context', 'legacy'], '每行一张卡片且不重不漏')
+  const [validation] = cards
+  // 第一块就是卡片头部：名称、来源徽标与说明都在这里，先于字段区。
+  const [head] = validation.props.children
+  assert.ok(text(head).includes('Friendly validation'))
+  assert.ok(text(head).includes('satellite-ui:originDeclared'))
+  assert.ok(text(head).includes('satellite-ui:originOverride'))
+  assert.ok(text(validation).includes('Responsibility for validation'))
+  assert.equal(findAll(validation, 'details').length, 1, '原生 details 仍保留')
+  assert.deepEqual(findAll(validation, 'label').map((label) => text(label)), ['satellite-ui:provider', 'satellite-ui:model'])
+  assert.deepEqual(findAll(validation, 'select').map((node) => node.props.value), ['deepseek-official', 'deepseek-flash'])
+  // 字段区之后才是操作：覆盖时给"跟随默认"，已声明的角色不能清理。
+  assert.ok(buttonByText(validation, 'satellite-ui:inherit') !== undefined, '覆盖的已声明角色可恢复继承')
+  assert.ok(text(validation).includes('satellite-ui:fixed'))
+})
+
 test('保存只写 routes，并过滤普通角色未填完整的模型覆盖', async () => {
   const state = settingsHost(DEFAULT_VALUE)
   const app = await mount({ configForms: state.configForms, remote: catalogRemote })
-  findAll(bodyRows(app.tree())[1], 'select')[1].props.onChange({ target: { value: '' } })
+  findAll(roleCards(app.tree())[1], 'select')[1].props.onChange({ target: { value: '' } })
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.deepEqual(savedPayload(state.writes), { op: 'set', path: ['routes'], value: [DEFAULT_VALUE.routes[0]] })
@@ -707,7 +731,7 @@ test('放弃模型修改丢弃草稿，回到当前已保存值', async () => {
 test('普通 roles 不伪造模型默认值，降级输入仍不允许编辑角色名', async () => {
   const value = { routes: [DEFAULT_VALUE.routes[0]], roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } } }
   const app = await mount({ configForms: settingsHost(value).configForms })
-  const rows = bodyRows(app.tree())
+  const rows = roleCards(app.tree())
   assert.equal(rows.length, 2)
   assert.deepEqual(inputValues(rows[0]), ['deepseek-official', 'deepseek-flash'])
   assert.deepEqual(inputValues(rows[1]), ['', ''])
@@ -718,7 +742,7 @@ test('只读快照不画表单', async () => {
   const { configForms } = settingsHost(DEFAULT_VALUE, { writable: false })
   const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
   const tree = app.tree()
-  assert.equal(findOne(tree, 'table'), undefined)
+  assert.equal(roleCards(tree).length, 0)
   assert.equal(findAll(tree, 'select').length, 0)
   assert.ok(text(tree).includes('satellite-ui:readOnly'))
 })
@@ -727,7 +751,7 @@ test('命名空间被服务但值里没有 routes/roles 时，只提示能力/�
   const { configForms } = settingsHost({ someOtherField: true })
   const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
   const tree = app.tree()
-  assert.equal(findOne(tree, 'table'), undefined)
+  assert.equal(roleCards(tree).length, 0)
   assert.ok(text(tree).includes('satellite-ui:unsupported'))
   assert.ok(!text(tree).includes('satellite-ui:notServed'), '不再有"没找到设置项"')
   assert.equal(buttonByText(tree, 'satellite-ui:retry'), undefined, '没有"重新检查"按钮')
@@ -783,12 +807,12 @@ test('unmodified defaults are not frozen, and new code roles show inherited rout
   const user = { routes: [{ ...DEFAULT_VALUE.routes[0], model: 'deepseek-v4-pro' }] }
   const state = settingsHost({ ...base, ...user }, { base, user })
   const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, pluginRole('future-role')] }) })
-  assert.equal(bodyRows(app.tree()).length, 3)
-  assert.equal(findAll(bodyRows(app.tree())[2], 'select')[1].props.value, 'claude-sonnet')
+  assert.equal(roleCards(app.tree()).length, 3)
+  assert.equal(findAll(roleCards(app.tree())[2], 'select')[1].props.value, 'claude-sonnet')
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.deepEqual(savedPayload(state.writes).value, user.routes)
-  assert.ok(text(bodyRows(app.tree())[2]).includes('satellite-ui:inherited'))
+  assert.ok(text(roleCards(app.tree())[2]).includes('satellite-ui:inherited'))
 })
 
 test('empty profile routes inherit defaults and no-op save unsets rather than snapshots them', async () => {
@@ -808,7 +832,7 @@ test('clearing or resetting an override returns to inherited display and preserv
   await tick()
   assert.deepEqual(savedPayload(state.writes).value, [DEFAULT_VALUE.routes[1]])
   assert.equal(findAll(app.tree(), 'select')[1].props.value, 'deepseek-flash')
-  buttonByText(bodyRows(app.tree())[1], 'satellite-ui:inherit').props.onClick()
+  buttonByText(roleCards(app.tree())[1], 'satellite-ui:inherit').props.onClick()
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.equal(savedPayload(state.writes).op, 'unset')
@@ -850,18 +874,19 @@ test('多绑定全部展示插件元数据，不在 UI 推断触发条件', asyn
   ]
   const metadata = pluginRole('validation', bindings)
   const app = await mount({ configForms: settingsHost(DEFAULT_VALUE).configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [metadata] }) })
-  const row = bodyRows(app.tree())[0]
+  const row = roleCards(app.tree())[0]
   assert.equal(findAll(row, 'details').length, 1)
   const rendered = text(row)
   for (const value of ['Friendly validation', 'Responsibility for validation', 'skill-validation', 'read-only', 'implement', 'before', 'mobile-check', 'extension-skill', 'Inspect mobile task', 'When projectKind is android', 'review', 'after', 'mobile-review', 'When review is requested', 'validate', 'base', 'Always']) assert.ok(rendered.includes(value), value)
-  assert.equal(findAll(row, 'li').length, 3)
+  const bindingList = findAll(row, 'ul').find((node) => String(node.props?.className ?? '').includes('satellite-ui__bindings'))
+  assert.equal(findAll(bindingList, 'li').length, 3, '三个绑定各占一条')
 })
 
 test('loading and unavailable settings are not reported as version errors', async () => {
   for (const status of ['loading', 'unavailable']) {
     const state = settingsHost(DEFAULT_VALUE, { status })
     const app = await mount({ configForms: state.configForms, remote: catalogRemote })
-    assert.equal(findOne(app.tree(), 'table'), undefined)
+    assert.equal(roleCards(app.tree()).length, 0)
     assert.ok(text(app.tree()).includes(status === 'loading' ? 'satellite-ui:settingsLoading' : 'satellite-ui:settingsUnavailable'))
   }
 })
@@ -871,19 +896,19 @@ test('real installed bundle version gates the editor, with retry after lookup fa
   let version = '0.2.0'
   const remote = { ...catalogRemote, pluginManager: { listBundles: async () => ({ ok: true, value: [{ name: 'satellite', installed: true, enabled: true, version }] }) } }
   const app = await mount({ configForms: state.configForms, remote })
-  assert.equal(findOne(app.tree(), 'table'), undefined)
+  assert.equal(roleCards(app.tree()).length, 0)
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
   version = '0.1.1'
   buttonByText(app.tree(), 'satellite-ui:retryCompatibility').props.onClick()
   await tick()
-  assert.ok(findOne(app.tree(), 'table'))
+  assert.ok(roleCards(app.tree()).length > 0)
   findAll(app.tree(), 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
   version = '0.1.1-beta.1'
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.equal(state.writes.length, 0, 'save rechecks version')
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
-  assert.equal(findOne(app.tree(), 'table'), undefined)
+  assert.equal(roleCards(app.tree()).length, 0)
   version = '0.1.1'
   buttonByText(app.tree(), 'satellite-ui:retryCompatibility').props.onClick()
   await tick()
@@ -900,11 +925,11 @@ test('offline version lookup blocks editing and retries without any settings wri
   } } }
   const app = await mount({ configForms: state.configForms, remote })
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
-  assert.equal(findOne(app.tree(), 'table'), undefined)
+  assert.equal(roleCards(app.tree()).length, 0)
   offline = false
   buttonByText(app.tree(), 'satellite-ui:retryCompatibility').props.onClick()
   await tick()
-  assert.ok(findOne(app.tree(), 'table'))
+  assert.ok(roleCards(app.tree()).length > 0)
   assert.equal(state.writes.length, 0)
 })
 
@@ -942,7 +967,7 @@ test('custom lower routes fail closed for every model parameter and route member
     const base = { ...DEFAULT_VALUE, routes }
     const state = settingsHost(base, { base, user: {}, defaults })
     const app = await mount({ configForms: state.configForms, remote: catalogRemote })
-    assert.equal(findOne(app.tree(), 'table'), undefined)
+    assert.equal(roleCards(app.tree()).length, 0)
     assert.ok(text(app.tree()).includes('satellite-ui:layeredRoutes'))
     assert.equal(await app.face.surface.mutate([], 7), false)
     assert.equal(state.writes.length, 0)
@@ -956,7 +981,7 @@ test('route and object key reorder is equivalent without losing advanced fields'
   const state = settingsHost(base, { base, user: {}, defaults })
   const app = await mount({ configForms: state.configForms, remote: catalogRemote })
   assert.equal(app.face.surface.read().inheritance, 'supported')
-  assert.ok(findOne(app.tree(), 'table'))
+  assert.ok(roleCards(app.tree()).length > 0)
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.equal(savedPayload(state.writes).op, 'unset')
@@ -971,7 +996,7 @@ test('missing, malformed and ambiguous schema defaults fail closed', async () =>
     state.scope.schema = schema
     const app = await mount({ configForms: state.configForms, remote: catalogRemote })
     assert.ok(text(app.tree()).includes('satellite-ui:defaultsUnavailable'))
-    assert.equal(findOne(app.tree(), 'table'), undefined)
+    assert.equal(roleCards(app.tree()).length, 0)
     assert.equal(await app.face.surface.mutate([], 7), false)
     assert.equal(state.writes.length, 0)
   }
@@ -998,7 +1023,7 @@ test('schema-only invalidation blocks editing, and recovery preserves draft', as
   const app = await mount({ configForms: state.configForms, remote: catalogRemote })
   findAll(app.tree(), 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
   state.publishSchema(undefined)
-  assert.equal(findOne(app.tree(), 'table'), undefined)
+  assert.equal(roleCards(app.tree()).length, 0)
   assert.ok(text(app.tree()).includes('satellite-ui:defaultsUnavailable'))
   state.publishSchema(original)
   assert.equal(findAll(app.tree(), 'select')[1].props.value, 'deepseek-v4-pro')
@@ -1010,13 +1035,13 @@ test('missing user override is legal; absent inherited routes are not guessed', 
   state.scope.publish({ user: undefined })
   const app = await mount({ configForms: state.configForms, remote: catalogRemote })
   assert.equal(app.face.surface.read().inheritance, 'supported')
-  assert.ok(findOne(app.tree(), 'table'))
+  assert.ok(roleCards(app.tree()).length > 0)
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.equal(savedPayload(state.writes).op, 'unset')
   state.scope.publish({ base: { declaredRoles: DEFAULT_VALUE.declaredRoles } })
   assert.ok(text(app.tree()).includes('satellite-ui:defaultsUnavailable'))
-  assert.equal(findOne(app.tree(), 'table'), undefined)
+  assert.equal(roleCards(app.tree()).length, 0)
 })
 
 
@@ -1024,7 +1049,7 @@ test('undeclared custom defaults are explicitly unknown, not invented provider/m
   const value = { ...DEFAULT_VALUE, declaredRoles: [...DEFAULT_VALUE.declaredRoles, 'custom-role'] }
   const state = settingsHost(value, { user: {} })
   const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, pluginRole('custom-role')] }) })
-  const row = bodyRows(app.tree())[2]
+  const row = roleCards(app.tree())[2]
   assert.ok(text(row).includes('satellite-ui:deploymentDefault'))
   assert.deepEqual(findAll(row, 'select').map((field) => field.props.value), ['', ''])
 })
@@ -1035,13 +1060,13 @@ test('孤儿路由普通保存逐字保持未知模型和所有高级字段，�
   const value = { ...DEFAULT_VALUE, declaredRoles: [...DEFAULT_VALUE.declaredRoles, 'legacy'], routes: [orphan, ...DEFAULT_VALUE.routes], roles }
   const state = settingsHost(value)
   const app = await mount({ configForms: state.configForms, remote: catalogRemote })
-  const orphanRow = () => bodyRows(app.tree()).find((row) => text(row).includes('legacy'))
+  const orphanRow = () => roleCards(app.tree()).find((row) => text(row).includes('legacy'))
   assert.ok(text(orphanRow()).includes(' unknown model '))
   assert.equal(findAll(orphanRow(), 'select').length, 0)
   assert.equal(findAll(orphanRow(), 'input').length, 0)
   assert.equal(buttonByText(orphanRow(), 'satellite-ui:inherit'), undefined)
   assert.ok(!text(app.tree()).includes('satellite-ui:catalogClears'))
-  findAll(bodyRows(app.tree())[0], 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
+  findAll(roleCards(app.tree())[0], 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.deepEqual(savedPayload(state.writes).value[0], orphan)
@@ -1105,7 +1130,7 @@ test('角色目录失败可重试；空 bindings 是已定义角色，不是孤�
   assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
   buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
   await tick()
-  const row = bodyRows(app.tree())[0]
+  const row = roleCards(app.tree())[0]
   assert.equal(calls, 2)
   assert.ok(text(row).includes('satellite-ui:noBindings'))
   assert.ok(!text(row).includes('satellite-ui:orphan'))
@@ -1145,13 +1170,13 @@ test('目录包含 declaredRoles 外的普通自定义角色，可配置模型�
   const value = { ...DEFAULT_VALUE, roles }
   const state = settingsHost(value, { user: { roles } })
   const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, metadata] }) })
-  const row = bodyRows(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
+  const row = roleCards(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
   assert.ok(row)
   assert.ok(text(row).includes('satellite-ui:noBindings'))
   assert.ok(text(row).includes('satellite-ui:deploymentDefault'))
   assert.deepEqual(findAll(row, 'select').map((select) => select.props.value), ['', ''])
   findAll(row, 'select')[0].props.onChange({ target: { value: 'anthropic' } })
-  const updated = bodyRows(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
+  const updated = roleCards(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
   findAll(updated, 'select')[1].props.onChange({ target: { value: 'claude-sonnet' } })
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
@@ -1336,6 +1361,22 @@ test('Android 执行：非绝对路径给出警告但允许保存；只读部署
   assert.equal(field(readOnly.tree(), 'adbPath'), undefined)
 })
 
+test('Android 分组：启用与隐私、工具路径、连接与限制，字段不重不漏', async () => {
+  const { tree } = await mountAndroidSection({ user: {}, base: { execution: { enabled: false } }, value: {} })
+  const groups = findAll(tree(), 'fieldset')
+  assert.deepEqual(groups.map((group) => text(findAll(group, 'legend')[0])), [
+    'satellite-ui:androidGroupEnable', 'satellite-ui:androidGroupPaths', 'satellite-ui:androidGroupLimits',
+  ])
+  // 每个分组里的控件按渲染顺序列出（input 与 select 各取一次，不重复计数）。
+  const names = (group) => findAll(group, 'input').concat(findAll(group, 'select')).map((node) => node.props['data-field'])
+  assert.deepEqual(names(groups[0]), ['enabled', 'privacy'])
+  assert.deepEqual(names(groups[1]), ['androidCli', 'adbPath', 'emulatorPath', 'avdmanagerPath', 'javaHome'])
+  assert.deepEqual(names(groups[2]), ['serverEndpoint', 'operationTimeoutMs', 'outputMaxBytes'])
+  const all = groups.flatMap(names)
+  assert.equal(new Set(all).size, all.length, '同一个字段不会出现在两个分组')
+  assert.equal(all.length, 10, '所有可编辑字段都被分进某个分组')
+})
+
 test('设置页分页：两页都在时用 tablist 切换，且页签带 aria 关联', async () => {
   const settings = settingsHost(DEFAULT_VALUE, { namespaces: ['satellite-node', 'satellite-android'], android: { execution: {} } })
   const harness = createHarness()
@@ -1354,7 +1395,7 @@ test('设置页分页：两页都在时用 tablist 切换，且页签带 aria �
   assert.equal(tablist.props['aria-label'], 'satellite-ui:tabsLabel')
   assert.equal(tabs()[0].props['aria-selected'], true)
   assert.equal(tabs()[1].props['aria-selected'], false)
-  assert.equal(findAll(harness.tree, 'tbody').length > 0, true, '默认渲染角色模型页')
+  assert.equal(roleCards(harness.tree).length > 0, true, '默认渲染角色模型页')
 
   // 切到 Android 页：只渲染那一页的表单。
   tabs()[1].props.onClick()
