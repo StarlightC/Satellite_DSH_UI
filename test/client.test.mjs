@@ -91,6 +91,7 @@ function host({ configForms, remote } = {}) {
       if (name === 'slots') return ctx.slots
       if (name === 'configForms') return configForms
       if (name === 'settingsSchema') return schemaService
+      if (name === 'remote.satelliteRoles') return remote?.satelliteRoles
       if (name === 'remote') return remote
       if (name === 'remote.pluginManager') return remote?.pluginManager ?? { listBundles: async () => ({ ok: true, value: [{ name: 'satellite', version: '0.1.0', installed: true, enabled: true }] }) }
       return undefined
@@ -112,6 +113,14 @@ const DEFAULT_VALUE = {
     { role: 'android-context', provider: 'deepseek-official', model: 'deepseek-v4-pro' },
   ],
 }
+
+/** Plugin-owned fixtures, deliberately independent of declaredRoles. */
+const pluginRole = (role, bindings = [{ node: 'validate', phase: 'base', condition: 'Always for validation' }]) => ({
+  role, label: `Friendly ${role}`, description: `Responsibility for ${role}`,
+  skill: `skill-${role}`, sandbox: 'read-only', bindings,
+})
+const ROLE_CATALOG = { version: 1, roles: DEFAULT_VALUE.declaredRoles.map((role) => pluginRole(role)) }
+const rolesCatalog = (...roles) => ({ version: 1, roles: roles.map((role) => pluginRole(role)) })
 
 /** 一组可用的目录：两个 provider，其中一个有多个模型。 */
 const CATALOG = {
@@ -263,7 +272,7 @@ function settingsHost(value, options) {
  * 跑 apply 并模拟宿主开始服务 `satellite-node`：取注入面、渲染元素树，并等目录结算。
  * 传 `{ trigger: false }` 可停在"门控没开"的状态，用来断言此时一个注册都没有。
  */
-async function mount({ configForms, remote } = {}, { trigger = true } = {}) {
+async function mount({ configForms, remote } = {}, { trigger = true, readRoles = async () => ROLE_CATALOG } = {}) {
   const harness = createHarness()
   const { exports } = loadFactory(harness)
   const { ctx, registrations } = host({ configForms, remote })
@@ -271,18 +280,74 @@ async function mount({ configForms, remote } = {}, { trigger = true } = {}) {
   if (trigger === true) configForms?.trigger?.()
   assert.equal(registrations.length, trigger === true ? 1 : 0, trigger === true ? '门控开启后已注册设置页一节' : '门控未开启时不应有注册')
   const face = registrations[0].options.inject()
+  // Exercise the component seam independently of the parent-owned native transport.
+  if (readRoles !== null) face.surface.readRoles = readRoles
   harness.render(registrations[0].component, face)
   await tick()
   return { harness, face, registrations, tree: () => harness.tree }
 }
 
-const removeButtons = (tree) => findAll(tree, 'button').filter((node) => text(node) === 'satellite-ui:remove')
+const removeButtons = (tree) => findAll(tree, 'button').filter((node) => text(node) === 'satellite-ui:cleanup')
 const buttons = (tree) => findAll(tree, 'button')
 const buttonByText = (tree, value) => buttons(tree).find((node) => text(node) === value)
 // 展开成测试域自己的数组：产物里的 children 数组来自另一个 vm 上下文，原型不同。
 const optionValues = (select) => [...(select.props.children ?? [])].map((option) => option.props.value)
 const optionLabels = (select) => [...(select.props.children ?? [])].map((option) => text(option))
 const inputValues = (row) => findAll(row, 'input').map((input) => input.props.value)
+
+test('native role reader mounts its own contribution once and reloads the live namespace', async () => {
+  const state = settingsHost(DEFAULT_VALUE)
+  const mounts = []
+  let reads = 0
+  const remote = {
+    session: { modelCatalog: async () => CATALOG },
+    async $mount(contribution) { mounts.push(JSON.parse(JSON.stringify(contribution))); return async () => {} },
+    satelliteRoles: { async describe() { reads += 1; return { ok: true, value: ROLE_CATALOG } } },
+  }
+  const app = await mount({ configForms: state.configForms, remote }, { readRoles: null })
+  assert.deepEqual(mounts, [{ package: 'satellite', descriptors: [{
+    id: 'satellite#satelliteRoles/describe', service: 'satelliteRoles', namespace: 'satelliteRoles',
+    method: 'describe', invocation: { kind: 'direct' }, parameters: [], result: { mode: 'src-json' },
+  }] }])
+  assert.ok(text(app.tree()).includes('Friendly validation'))
+  assert.ok(text(app.tree()).includes('satellite-ui:roleScopeNotice'))
+  assert.equal(reads, 1)
+  remote.satelliteRoles = { async describe() { reads += 1; return { ok: true, value: { version: 1, roles: [pluginRole('validation', [])] } } } }
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  assert.equal(mounts.length, 1)
+  assert.equal(reads, 2)
+  assert.ok(text(app.tree()).includes('satellite-ui:noBindings'))
+  assert.ok(text(app.tree()).includes('satellite-ui:orphan'))
+  assert.equal(state.writes.length, 0)
+})
+
+test('native role reader retries a failed mount and fails closed on Remote errors or an old Host', async () => {
+  const state = settingsHost(DEFAULT_VALUE)
+  let attempts = 0
+  let ok = true
+  const remote = {
+    session: { modelCatalog: async () => CATALOG },
+    async $mount() { if (++attempts === 1) throw new Error('mount failed'); return async () => {} },
+    satelliteRoles: { async describe() { return { ok, value: ROLE_CATALOG } } },
+  }
+  const app = await mount({ configForms: state.configForms, remote }, { readRoles: null })
+  assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
+  assert.equal(buttonByText(app.tree(), 'satellite-ui:save').props.disabled, true)
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  assert.equal(attempts, 2)
+  assert.ok(text(app.tree()).includes('Friendly validation'))
+  ok = false
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
+  assert.equal(attempts, 2)
+  assert.equal(state.writes.length, 0)
+  const legacy = await mount({ configForms: settingsHost(DEFAULT_VALUE).configForms, remote: { session: remote.session } }, { readRoles: null })
+  assert.ok(text(legacy.tree()).includes('satellite-ui:rolesUnavailable'))
+  assert.equal(removeButtons(legacy.tree()).length, 0)
+})
 
 test('lib/client.js 开头就是宿主模块工厂包装，id 为 satellite-ui', () => {
   const head = bundle.split('\n').slice(0, 3).join('\n')
@@ -351,6 +416,7 @@ test('apply 在无 DOM、无插槽服务的最小宿主上不抛错，且注册�
   assert.equal(typeof registrations[0].component, 'function')
   const face = options.inject()
   assert.equal(typeof face.surface.read, 'function')
+  assert.equal(typeof face.surface.readRoles, 'function')
   assert.equal(typeof face.catalog.load, 'function', '目录读取面随注入面一起给出')
   // 无 DOM：样式 effect 是 no-op，清理函数仍可调用。
   for (const dispose of disposers) dispose()
@@ -391,23 +457,25 @@ test('固定命名空间通过真实schema封套核验默认值，并按revision
   assert.equal(state.scope.listeners.size, 0)
 })
 
-test('行集合：declaredRoles 是固定行，routes 里多出的角色可删', async () => {
+test('有效目录定义角色，旧 declaredRoles 不能阻止孤儿 routes 清理', async () => {
   const value = {
-    declaredRoles: ['validation'],
-    routes: [
-      { role: 'validation', provider: 'deepseek-official', model: 'deepseek-flash' },
-      { role: 'extra', provider: 'anthropic', model: 'claude-sonnet' },
-    ],
+    declaredRoles: ['validation', 'extra'],
+    routes: [DEFAULT_VALUE.routes[0], { role: 'extra', provider: 'anthropic', model: 'claude-sonnet' }],
   }
-  const { configForms } = settingsHost(value)
-  const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
+  const state = settingsHost(value)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => rolesCatalog('validation') })
   const rows = bodyRows(app.tree())
-  assert.equal(rows.length, 2, '声明的角色 + routes 里多出的角色各一行')
-  assert.ok(text(rows[0]).includes('validation'))
-  assert.equal(removeButtons(rows[0]).length, 0, '声明行没有删除控件')
-  assert.equal(removeButtons(rows[1]).length, 1, 'routes 里多出的角色可删')
+  assert.equal(rows.length, 2)
+  assert.equal(removeButtons(rows[0]).length, 0)
+  assert.equal(removeButtons(rows[1]).length, 1)
   assert.ok(text(rows[0]).includes('satellite-ui:originDeclared'))
-  assert.ok(text(rows[1]).includes('satellite-ui:originOverride'))
+  assert.ok(text(rows[1]).includes('satellite-ui:orphan'))
+  assert.ok(!text(rows[1]).includes('satellite-ui:fixed'))
+  removeButtons(rows[1])[0].props.onClick()
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  await tick()
+  assert.deepEqual(savedPayload(state.writes), { op: 'set', path: ['routes'], value: [DEFAULT_VALUE.routes[0]] })
+  assert.deepEqual(state.scope.snapshot.user.declaredRoles, value.declaredRoles)
 })
 
 test('目录可用时 provider/model 用 select，且选项来自目录', async () => {
@@ -516,28 +584,16 @@ test('空选项按未配置保存：该行不写入 routes', async () => {
   assert.equal(JSON.stringify(other.writes[0].ops[0].value), JSON.stringify([DEFAULT_VALUE.routes[1]]))
 })
 
-test('value 缺 declaredRoles 时给出说明且不渲染固定行', async () => {
-  const value = {
-    routes: [{ role: 'validation', provider: 'deepseek-official', model: 'deepseek-flash' }],
-    roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } },
-  }
-  const { configForms } = settingsHost(value)
-  const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
-  const tree = app.tree()
-  assert.ok(text(tree).includes('satellite-ui:declaredMissing'), '缺键时要有明确说明')
-  assert.ok(!text(tree).includes('satellite-ui:fixed'), '没有固定行')
-  assert.ok(!text(tree).includes('satellite-ui:originDeclared'))
-  const rows = bodyRows(tree)
+test('缺少 declaredRoles 仍由权威目录展示角色与只读名称', async () => {
+  const value = { routes: [DEFAULT_VALUE.routes[0]], roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } } }
+  const app = await mount({ configForms: settingsHost(value).configForms, remote: catalogRemote })
+  const rows = bodyRows(app.tree())
   assert.equal(rows.length, 2)
-  for (const row of rows) assert.equal(removeButtons(row).length, 1, '没有声明标记的行都可删')
-
-  // 有该键时这条说明不出现（正常渲染固定行）。
-  const healthy = await mount({
-    configForms: settingsHost(DEFAULT_VALUE).configForms,
-    remote: { session: { modelCatalog: async () => CATALOG } },
-  })
-  assert.ok(!text(healthy.tree()).includes('satellite-ui:declaredMissing'))
-  assert.ok(text(healthy.tree()).includes('satellite-ui:fixed'))
+  assert.ok(text(rows[0]).includes('Friendly validation'))
+  assert.ok(text(rows[1]).includes('Responsibility for android-context'))
+  assert.equal(findAll(app.tree(), 'input').length, 0)
+  assert.equal(removeButtons(app.tree()).length, 0)
+  assert.ok(!text(app.tree()).includes('satellite-ui:rolesUnavailable'))
 })
 
 test('目录调用抛错时降级为文本输入，页面仍完整渲染', async () => {
@@ -602,24 +658,18 @@ test('目录加载失败后可以重新加载，成功后换成下拉', async ()
   assert.equal(findAll(app.tree(), 'select').length, 4)
 })
 
-test('declaredRoles 的行没有删除控件，本次新增的行有', async () => {
-  const { configForms } = settingsHost(DEFAULT_VALUE)
-  const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
-  assert.equal(bodyRows(app.tree()).length, 2)
-  for (const row of bodyRows(app.tree())) {
-    assert.equal(removeButtons(row).length, 0, `声明行不应有按钮：${text(row)}`)
-  }
-  buttonByText(app.tree(), 'satellite-ui:add').props.onClick()
+test('插件角色没有新增入口，任何角色名都不可编辑', async () => {
+  const value = { ...DEFAULT_VALUE, routes: [...DEFAULT_VALUE.routes, { role: 'legacy', provider: 'p', model: 'm' }] }
+  const app = await mount({ configForms: settingsHost(value).configForms, remote: catalogRemote })
+  assert.equal(buttonByText(app.tree(), 'satellite-ui:add'), undefined)
+  assert.equal(findAll(app.tree(), 'input').length, 0)
   const rows = bodyRows(app.tree())
   assert.equal(rows.length, 3)
   assert.equal(removeButtons(rows[0]).length, 0)
   assert.equal(removeButtons(rows[1]).length, 0)
   assert.equal(removeButtons(rows[2]).length, 1)
-  assert.equal(buttonByText(rows[2], 'satellite-ui:remove').props['aria-label'], 'satellite-ui:remove 3')
-  assert.ok(text(rows[2]).includes('satellite-ui:originAdded'))
-  assert.equal(findAll(rows[0], 'input').length, 0)
-  assert.equal(findAll(rows[2], 'input').length, 1, '新增行的角色名可编辑')
-  assert.ok(text(rows[0]).includes('satellite-ui:fixed'), '固定行说明不可删除')
+  assert.equal(findAll(rows[2], 'select').length, 0)
+  assert.equal(removeButtons(rows[2])[0].props['aria-label'], 'satellite-ui:cleanup legacy')
 })
 
 test('固定行的 provider/model 初值取自 routes', async () => {
@@ -632,47 +682,36 @@ test('固定行的 provider/model 初值取自 routes', async () => {
   assert.ok(text(rows[1]).includes('android-context'))
 })
 
-test('保存只写 routes，并过滤掉未填完整的行', async () => {
-  const { configForms, writes } = settingsHost(DEFAULT_VALUE)
-  const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
-  buttonByText(app.tree(), 'satellite-ui:add').props.onClick()
-  const newRow = bodyRows(app.tree())[2]
-  findAll(newRow, 'input')[0].props.onChange({ target: { value: 'half-filled' } })
+test('保存只写 routes，并过滤普通角色未填完整的模型覆盖', async () => {
+  const state = settingsHost(DEFAULT_VALUE)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote })
+  findAll(bodyRows(app.tree())[1], 'select')[1].props.onChange({ target: { value: '' } })
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
-  assert.equal(writes.length, 1)
-  assert.equal(JSON.stringify(writes[0].ops[0].path), JSON.stringify(['routes']))
-  assert.equal(JSON.stringify(writes[0].ops[0].value), JSON.stringify(DEFAULT_VALUE.routes))
-  assert.equal(writes[0].revision, 7)
+  assert.deepEqual(savedPayload(state.writes), { op: 'set', path: ['routes'], value: [DEFAULT_VALUE.routes[0]] })
+  assert.equal(state.writes[0].revision, 7)
   assert.ok(text(app.tree()).includes('satellite-ui:saved'))
 })
 
-test('放弃修改丢弃草稿，回到当前已保存值', async () => {
-  const { configForms } = settingsHost(DEFAULT_VALUE)
-  const app = await mount({ configForms, remote: { session: { modelCatalog: async () => CATALOG } } })
+test('放弃模型修改丢弃草稿，回到当前已保存值', async () => {
+  const app = await mount({ configForms: settingsHost(DEFAULT_VALUE).configForms, remote: catalogRemote })
   const discardButton = () => buttonByText(app.tree(), 'satellite-ui:discard')
-  assert.equal(discardButton().props.disabled, true, '没有草稿时不可点')
-  buttonByText(app.tree(), 'satellite-ui:add').props.onClick()
-  assert.equal(bodyRows(app.tree()).length, 3)
+  assert.equal(discardButton().props.disabled, true)
+  findAll(app.tree(), 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
   assert.equal(discardButton().props.disabled, false)
   discardButton().props.onClick()
-  assert.equal(bodyRows(app.tree()).length, 2)
+  assert.equal(findAll(app.tree(), 'select')[1].props.value, 'deepseek-flash')
   assert.equal(discardButton().props.disabled, true)
 })
 
-test('declaredRoles 缺失时退回 routes + roles 的旧行集合', async () => {
-  const value = {
-    routes: [{ role: 'validation', provider: 'deepseek-official', model: 'deepseek-flash' }],
-    roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } },
-  }
-  const { configForms } = settingsHost(value)
-  const app = await mount({ configForms, remote: undefined })
+test('普通 roles 不伪造模型默认值，降级输入仍不允许编辑角色名', async () => {
+  const value = { routes: [DEFAULT_VALUE.routes[0]], roles: { 'android-context': { agentOptions: { provider: 'anthropic', model: 'claude-sonnet' } } } }
+  const app = await mount({ configForms: settingsHost(value).configForms })
   const rows = bodyRows(app.tree())
   assert.equal(rows.length, 2)
-  assert.deepEqual(inputValues(rows[0]), ['validation', 'deepseek-official', 'deepseek-flash'])
-  assert.deepEqual(inputValues(rows[1]), ['android-context', '', ''], '普通roles不作为设置快照的默认面')
-  assert.equal(removeButtons(rows[1]).length, 1, '没有声明标记的行都可删')
-  assert.equal(findAll(rows[1], 'input').length, 3, '降级时角色名也可编辑')
+  assert.deepEqual(inputValues(rows[0]), ['deepseek-official', 'deepseek-flash'])
+  assert.deepEqual(inputValues(rows[1]), ['', ''])
+  assert.equal(removeButtons(rows[1]).length, 0)
 })
 
 test('只读快照不画表单', async () => {
@@ -707,7 +746,7 @@ test('页面用到的文案键都在 en 与 zh 字典里，且两份键集合一
 })
 
 
-const catalogRemote = { session: { modelCatalog: async () => CATALOG } }
+const catalogRemote = { session: { modelCatalog: async () => CATALOG }, satelliteRoles: { describe: async () => ({ ok: true, value: ROLE_CATALOG }) }, $mount: async () => async () => {} }
 const savedPayload = (writes) => JSON.parse(JSON.stringify(writes.at(-1).ops[0]))
 
 test('native receiver, false refusal and subscription preserve draft', async () => {
@@ -743,7 +782,7 @@ test('unmodified defaults are not frozen, and new code roles show inherited rout
   const base = { declaredRoles: [...DEFAULT_VALUE.declaredRoles, future.role], routes: [...DEFAULT_VALUE.routes, future] }
   const user = { routes: [{ ...DEFAULT_VALUE.routes[0], model: 'deepseek-v4-pro' }] }
   const state = settingsHost({ ...base, ...user }, { base, user })
-  const app = await mount({ configForms: state.configForms, remote: catalogRemote })
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, pluginRole('future-role')] }) })
   assert.equal(bodyRows(app.tree()).length, 3)
   assert.equal(findAll(bodyRows(app.tree())[2], 'select')[1].props.value, 'claude-sonnet')
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
@@ -803,16 +842,19 @@ test('partial catalogue never removes an unchanged unavailable provider override
   assert.deepEqual(savedPayload(state.writes).value[1], custom)
 })
 
-test('duplicate new role blocks writes without discarding draft', async () => {
-  const state = settingsHost(DEFAULT_VALUE)
-  const app = await mount({ configForms: state.configForms, remote: catalogRemote })
-  buttonByText(app.tree(), 'satellite-ui:add').props.onClick()
-  findAll(bodyRows(app.tree())[2], 'input')[0].props.onChange({ target: { value: 'validation' } })
-  assert.ok(text(app.tree()).includes('satellite-ui:duplicate'))
-  assert.equal(buttonByText(app.tree(), 'satellite-ui:save').props.disabled, true)
-  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
-  await tick()
-  assert.equal(state.writes.length, 0)
+test('多绑定全部展示插件元数据，不在 UI 推断触发条件', async () => {
+  const bindings = [
+    { node: 'implement', phase: 'before', extension: 'mobile-check', skill: 'extension-skill', objective: 'Inspect mobile task', condition: 'When projectKind is android' },
+    { node: 'review', phase: 'after', extension: 'mobile-review', condition: 'When review is requested' },
+    { node: 'validate', phase: 'base', condition: 'Always' },
+  ]
+  const metadata = pluginRole('validation', bindings)
+  const app = await mount({ configForms: settingsHost(DEFAULT_VALUE).configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [metadata] }) })
+  const row = bodyRows(app.tree())[0]
+  assert.equal(findAll(row, 'details').length, 1)
+  const rendered = text(row)
+  for (const value of ['Friendly validation', 'Responsibility for validation', 'skill-validation', 'read-only', 'implement', 'before', 'mobile-check', 'extension-skill', 'Inspect mobile task', 'When projectKind is android', 'review', 'after', 'mobile-review', 'When review is requested', 'validate', 'base', 'Always']) assert.ok(rendered.includes(value), value)
+  assert.equal(findAll(row, 'li').length, 3)
 })
 
 test('loading and unavailable settings are not reported as version errors', async () => {
@@ -878,7 +920,7 @@ test('pending save locks editable fields until settlement', async () => {
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   for (const select of findAll(app.tree(), 'select')) assert.equal(select.props.disabled, true)
-  assert.equal(buttonByText(app.tree(), 'satellite-ui:add').props.disabled, true)
+  assert.equal(buttonByText(app.tree(), 'satellite-ui:retryRoles').props.disabled, true)
   finish()
   await tick()
   assert.ok(text(app.tree()).includes('satellite-ui:saved'))
@@ -981,10 +1023,140 @@ test('missing user override is legal; absent inherited routes are not guessed', 
 test('undeclared custom defaults are explicitly unknown, not invented provider/model values', async () => {
   const value = { ...DEFAULT_VALUE, declaredRoles: [...DEFAULT_VALUE.declaredRoles, 'custom-role'] }
   const state = settingsHost(value, { user: {} })
-  const app = await mount({ configForms: state.configForms, remote: catalogRemote })
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, pluginRole('custom-role')] }) })
   const row = bodyRows(app.tree())[2]
   assert.ok(text(row).includes('satellite-ui:deploymentDefault'))
   assert.deepEqual(findAll(row, 'select').map((field) => field.props.value), ['', ''])
+})
+
+test('孤儿路由普通保存逐字保持未知模型和所有高级字段，只有清理删除 routes', async () => {
+  const orphan = { role: 'legacy', provider: ' retired provider ', model: ' unknown model ', reasoningEffort: 'custom', maxTokens: 123, future: { keep: ['a', 2] } }
+  const roles = { legacy: { agentOptions: { model: 'ordinary-model' }, untouched: true } }
+  const value = { ...DEFAULT_VALUE, declaredRoles: [...DEFAULT_VALUE.declaredRoles, 'legacy'], routes: [orphan, ...DEFAULT_VALUE.routes], roles }
+  const state = settingsHost(value)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote })
+  const orphanRow = () => bodyRows(app.tree()).find((row) => text(row).includes('legacy'))
+  assert.ok(text(orphanRow()).includes(' unknown model '))
+  assert.equal(findAll(orphanRow(), 'select').length, 0)
+  assert.equal(findAll(orphanRow(), 'input').length, 0)
+  assert.equal(buttonByText(orphanRow(), 'satellite-ui:inherit'), undefined)
+  assert.ok(!text(app.tree()).includes('satellite-ui:catalogClears'))
+  findAll(bodyRows(app.tree())[0], 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  await tick()
+  assert.deepEqual(savedPayload(state.writes).value[0], orphan)
+  removeButtons(orphanRow())[0].props.onClick()
+  assert.equal(state.writes.length, 1, 'cleanup waits for Save')
+  buttonByText(app.tree(), 'satellite-ui:discard').props.onClick()
+  assert.ok(orphanRow(), 'discard restores legacy route')
+  removeButtons(orphanRow())[0].props.onClick()
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  await tick()
+  assert.equal(savedPayload(state.writes).value.some((route) => route.role === 'legacy'), false)
+  assert.deepEqual(state.scope.snapshot.user.roles, roles)
+  assert.deepEqual(state.writes.map((write) => [...write.ops[0].path]), [['routes'], ['routes']])
+})
+
+test('清理最后一条孤儿 routes 使用 unset，不删除普通 roles', async () => {
+  const value = { declaredRoles: ['old'], routes: [{ role: 'old', provider: 'p', model: 'm', unknown: true }], roles: { old: { keep: true } } }
+  const state = settingsHost(value)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [] }) })
+  removeButtons(app.tree())[0].props.onClick()
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  await tick()
+  assert.deepEqual(savedPayload(state.writes), { op: 'unset', path: ['routes'] })
+  assert.deepEqual(state.scope.snapshot.user.roles, value.roles)
+})
+
+test('缺失或非法角色目录不把角色当孤儿，不规范模型也不写回', async () => {
+  const invalid = [undefined, null, {}, { roles: [] }, { version: 2, roles: [] }, { version: 1, roles: null },
+    { version: 1, roles: [pluginRole('validation'), pluginRole('validation')] },
+    { version: 1, roles: [{ ...pluginRole('validation'), sandbox: 'invalid' }] },
+    { version: 1, roles: [{ ...pluginRole('validation'), sandbox: ['read-only'] }] },
+    { version: 1, roles: [{ ...pluginRole('validation'), bindings: [{ node: 'review', phase: 'base', condition: {} }] }] },
+    { version: 1, roles: [{ ...pluginRole('validation'), bindings: [{ node: 'review', phase: 'bad', condition: 'Always' }] }] },
+    { version: 1, roles: [{ ...pluginRole('validation'), bindings: [{ node: 'review', phase: 'base' }] }] }]
+  for (const raw of invalid) {
+    const value = { ...DEFAULT_VALUE, routes: [{ ...DEFAULT_VALUE.routes[0], provider: 'unknown', model: 'unknown-model', future: 42 }] }
+    const state = settingsHost(value)
+    const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => raw })
+    assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
+    assert.ok(text(app.tree()).includes('satellite-ui:bindingsUnverified'))
+    assert.ok(!text(app.tree()).includes('satellite-ui:orphan'))
+    assert.ok(!text(app.tree()).includes('satellite-ui:catalogClears'))
+    assert.ok(text(app.tree()).includes('unknown-model'))
+    assert.equal(removeButtons(app.tree()).length, 0)
+    assert.equal(findAll(app.tree(), 'select').length, 0)
+    assert.equal(buttonByText(app.tree(), 'satellite-ui:save').props.disabled, true)
+    buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+    await tick()
+    assert.equal(state.writes.length, 0)
+    assert.deepEqual(state.scope.snapshot.user.routes, value.routes)
+  }
+})
+
+test('角色目录失败可重试；空 bindings 是已定义角色，不是孤儿', async () => {
+  let calls = 0
+  const state = settingsHost(DEFAULT_VALUE)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => {
+    if (++calls === 1) throw new Error('offline')
+    return { version: 1, roles: [pluginRole('validation', [])] }
+  } })
+  assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  const row = bodyRows(app.tree())[0]
+  assert.equal(calls, 2)
+  assert.ok(text(row).includes('satellite-ui:noBindings'))
+  assert.ok(!text(row).includes('satellite-ui:orphan'))
+  assert.equal(removeButtons(row).length, 0)
+  assert.equal(findAll(row, 'select').length, 2)
+  assert.equal(state.writes.length, 0)
+})
+
+test('目录加载中不分类孤儿，重新核验失败保留模型草稿直到恢复', async () => {
+  let finish
+  let response = new Promise((resolve) => { finish = resolve })
+  const state = settingsHost(DEFAULT_VALUE)
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: () => response })
+  assert.ok(text(app.tree()).includes('satellite-ui:rolesLoading'))
+  assert.ok(!text(app.tree()).includes('satellite-ui:orphan'))
+  assert.equal(removeButtons(app.tree()).length, 0)
+  assert.equal(buttonByText(app.tree(), 'satellite-ui:save').props.disabled, true)
+  finish(ROLE_CATALOG)
+  await tick()
+  findAll(app.tree(), 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
+  response = Promise.resolve(undefined)
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  assert.ok(text(app.tree()).includes('satellite-ui:rolesUnavailable'))
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  assert.equal(state.writes.length, 0)
+  response = Promise.resolve(ROLE_CATALOG)
+  buttonByText(app.tree(), 'satellite-ui:retryRoles').props.onClick()
+  await tick()
+  assert.equal(findAll(app.tree(), 'select')[1].props.value, 'deepseek-v4-pro')
+  assert.equal(buttonByText(app.tree(), 'satellite-ui:discard').props.disabled, false)
+})
+
+test('目录包含 declaredRoles 外的普通自定义角色，可配置模型且仅保存 routes', async () => {
+  const metadata = pluginRole('ordinary-custom', [])
+  const roles = { 'ordinary-custom': { agentOptions: { provider: 'private', model: 'not-a-schema-default' } } }
+  const value = { ...DEFAULT_VALUE, roles }
+  const state = settingsHost(value, { user: { roles } })
+  const app = await mount({ configForms: state.configForms, remote: catalogRemote }, { readRoles: async () => ({ version: 1, roles: [...ROLE_CATALOG.roles, metadata] }) })
+  const row = bodyRows(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
+  assert.ok(row)
+  assert.ok(text(row).includes('satellite-ui:noBindings'))
+  assert.ok(text(row).includes('satellite-ui:deploymentDefault'))
+  assert.deepEqual(findAll(row, 'select').map((select) => select.props.value), ['', ''])
+  findAll(row, 'select')[0].props.onChange({ target: { value: 'anthropic' } })
+  const updated = bodyRows(app.tree()).find((row) => text(row).includes('Friendly ordinary-custom'))
+  findAll(updated, 'select')[1].props.onChange({ target: { value: 'claude-sonnet' } })
+  buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
+  await tick()
+  assert.deepEqual(savedPayload(state.writes), { op: 'set', path: ['routes'], value: [{ role: 'ordinary-custom', provider: 'anthropic', model: 'claude-sonnet' }] })
+  assert.deepEqual(state.scope.snapshot.user.roles, roles)
 })
 
 /* ---------------------------------------------------------------------------------

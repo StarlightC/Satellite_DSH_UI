@@ -21,10 +21,21 @@ export const css = `
 .satellite-ui__input:disabled { opacity: .6; }
 .satellite-ui__select { padding: 0 6px; }
 .satellite-ui__catalog { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.satellite-ui__role { display: block; min-height: 32px; padding: 6px 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; }
+.satellite-ui__role { display: block; padding: 2px 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; }
+.satellite-ui__role-id { color: var(--dsw-alias-label-tertiary); font-size: 11px; overflow-wrap: anywhere; }
+.satellite-ui__description { margin: 3px 0; color: var(--dsw-alias-label-secondary); max-width: 36em; overflow-wrap: anywhere; }
+.satellite-ui__details { margin-top: 4px; max-width: 36em; overflow-wrap: anywhere; }
+.satellite-ui__details summary { cursor: pointer; color: var(--dsw-alias-label-secondary); }
+.satellite-ui__details summary:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); }
+.satellite-ui__metadata { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 8px; margin: 5px 0; font-size: 11px; }
+.satellite-ui__metadata dt { color: var(--dsw-alias-label-tertiary); }
+.satellite-ui__metadata dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.satellite-ui__bindings { margin: 5px 0; padding-left: 16px; }
+.satellite-ui__bindings li + li { margin-top: 8px; }
+.satellite-ui__raw-model { white-space: pre-wrap; overflow-wrap: anywhere; }
 .satellite-ui__badge { color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
 .satellite-ui__badge[data-state="declared"] { color: var(--dsw-alias-state-business-primary); }
-.satellite-ui__badge[data-state="added"] { color: var(--dsw-alias-state-success-primary); }
+.satellite-ui__badge[data-state="orphan"], .satellite-ui__badge[data-state="unverified"] { color: var(--dsw-alias-state-warn-primary); white-space: normal; }
 .satellite-ui__badge[data-state="fixed"] { white-space: normal; }
 .satellite-ui__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .satellite-ui__button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 6px; min-height: 28px; max-width: 100%; padding: 4px 10px; border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; text-decoration: none; cursor: pointer; }

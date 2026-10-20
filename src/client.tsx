@@ -7,14 +7,9 @@
  *   scope.mutate([{ op: 'set', path: ['routes'], value }], revision) 是唯一写入口
  * （用法与官方 `ui-settings-subagent` 页面一致。）
  *
- * 表单暴露的是**易变字段的值**，因此行集合由两个字段决定：
- *   declaredRoles: string[]                        —— 插件声明的角色：固定行，不提供删除控件
- *   routes: {role, provider, model}[]              —— 每个角色的生效 provider/model
- * routes 里出现但不在 declaredRoles 里的角色、以及本次新增的行可删；保存只写 routes。
- *
- * 设置快照的 `value` 里**没有** `declaredRoles` 这个键时（例如 profile 里存着升级前的行配置
- * 快照、新字段还没生效），页面给一句明确说明，而不是静默画一张空表；有该键时才按声明的
- * 角色渲染固定行。
+ * 角色说明与绑定来自功能插件的版本化 RoleCatalog，不在界面硬编码。
+ * 角色名称只读，不提供新增角色；有效目录中未定义的旧路由仅允许显式清理 routes。
+ * 缺失或非法目录不能证明角色是否绑定，保留所有配置并禁止写入。
  *
  * provider/model 的候选来自宿主的实时模型目录 `remote.session.modelCatalog()`：
  *   成功 → response.value.groups（分组） / response.value.failures（部分 provider 取不到）
@@ -38,6 +33,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { satisfiesRange } from './compat.js'
 import { css } from './client-styles.js'
+import { createRoleReader } from './role-remote.js'
 import { en, zh, type Translate } from './client-locales.js'
 
 export const name = 'satellite-ui/client'
@@ -97,15 +93,11 @@ interface RouteEntry {
   maxTokens?: number
 }
 
-/** 表格一行：角色 + provider + model，以及该行的来源与可否删除。 */
+/** A route row; role identity is immutable and comes from plugin metadata/settings. */
 interface RouteRow {
   role: string
   provider: string
   model: string
-  /** 由 `declaredRoles` 声明：固定行，没有删除控件。 */
-  declared: boolean
-  /** 本次新增：可删除。 */
-  added: boolean
   explicit: boolean
   original?: RouteEntry | undefined
 }
@@ -140,10 +132,55 @@ interface Catalog {
  * 组件只拿它的方法，不直接接触 ctx。
  */
 interface Surface {
+  readRoles(): Promise<unknown>
   compatible(): Promise<boolean>
   read(): Reading | undefined
   mutate(value: RouteEntry[], revision: number | undefined): Promise<boolean>
   subscribe(listener: () => void): () => void
+}
+
+/** Plugin-owned metadata. sandbox/condition are displayed, never interpreted as authority. */
+interface RoleBinding {
+  node: string
+  phase: 'base' | 'before' | 'after'
+  extension?: string
+  skill?: string
+  objective?: string
+  condition: string
+}
+interface PluginRole {
+  role: string
+  label: string
+  description: string
+  skill?: string
+  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
+  bindings: RoleBinding[]
+}
+interface RoleCatalog { version: 1; roles: PluginRole[] }
+type RolesState = { status: 'loading' } | { status: 'error' } | { status: 'ready'; catalog: RoleCatalog }
+
+/** Reject an incomplete catalogue as a whole: partial evidence cannot classify orphan routes. */
+function parseRoleCatalog(raw: unknown): RoleCatalog | undefined {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+  const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+  const optionalText = (value: unknown) => value === undefined || typeof value === 'string'
+  if (!record(raw) || raw.version !== 1 || !Array.isArray(raw.roles)) return undefined
+  const seen = new Set<string>()
+  for (const role of raw.roles) {
+    if (!record(role) || !nonempty(role.role) || seen.has(role.role)
+      || !nonempty(role.label) || typeof role.description !== 'string' || !optionalText(role.skill)
+      || typeof role.sandbox !== 'string' || !['read-only', 'workspace-write', 'danger-full-access'].includes(role.sandbox)
+      || !Array.isArray(role.bindings)) return undefined
+    seen.add(role.role)
+    for (const binding of role.bindings) {
+      if (!record(binding) || !nonempty(binding.node)
+        || typeof binding.phase !== 'string' || !['base', 'before', 'after'].includes(binding.phase)
+        || !optionalText(binding.extension) || !optionalText(binding.skill)
+        || !optionalText(binding.objective) || typeof binding.condition !== 'string') return undefined
+    }
+  }
+  return raw as unknown as RoleCatalog
 }
 
 /** 一次探测结果：设置服务里那一格表单 + 它所在的命名空间。 */
@@ -198,13 +235,12 @@ function roleNames(values: SatelliteSettings): string[] {
  * Profile overrides are sparse. Missing roles display the inherited schema defaults.
  * Ordinary role configuration is not exposed as editable settings.
  */
-function initialRows(snapshot: ScopeSnapshot): RouteRow[] {
+function initialRows(snapshot: ScopeSnapshot, catalog?: RoleCatalog): RouteRow[] {
   const values = snapshot.value ?? {}
   const base = snapshot.base ?? {}
   const overrides = routeEntries(snapshot.user ?? {})
   const inherited = routeEntries(base)
-  const declared = new Set(declaredRoleNames(base).concat(declaredRoleNames(values)))
-  const names = [...new Set([...declared, ...roleNames(base), ...roleNames(values)])]
+  const names = [...new Set([...(catalog?.roles.map((role) => role.role) ?? []), ...roleNames(base), ...roleNames(values), ...overrides.map((route) => route.role)])]
   return names.map((role) => {
     const original = overrides.find((entry) => entry.role === role)
     const route = original ?? inherited.find((entry) => entry.role === role)
@@ -212,8 +248,6 @@ function initialRows(snapshot: ScopeSnapshot): RouteRow[] {
       role,
       provider: route?.provider ?? '',
       model: route?.model ?? '',
-      declared: declared.has(role),
-      added: false,
       explicit: original !== undefined,
       original,
     }
@@ -226,8 +260,10 @@ function initialRows(snapshot: ScopeSnapshot): RouteRow[] {
  * 草稿不会因此被无谓地新建）。目录不可用（降级为文本输入）时调用方不调它——
  * 那时选项不是目录，没有"目录内"这回事。
  */
-function normalizeRows(rows: RouteRow[], groups: CatalogGroup[]): RouteRow[] {
+function normalizeRows(rows: RouteRow[], groups: CatalogGroup[], roles?: RoleCatalog): RouteRow[] {
   return rows.map((row) => {
+    // Unknown role metadata is not permission to normalize or erase legacy routes.
+    if (!roles?.roles.some((role) => role.role === row.role)) return row
     const group = groups.find((entry) => entry.id === row.provider)
     if (group === undefined) {
       return row.provider === '' && row.model === '' ? row : { ...row, provider: '', model: '' }
@@ -288,6 +324,7 @@ function createSurface(ctx: Context): Surface {
     return { namespace: SETTINGS_NS, snapshot, inheritance }
   }
   return {
+    readRoles: createRoleReader(ctx),
     async compatible() {
       const manager = ctx.get('remote.pluginManager') as { listBundles(): Promise<{ ok: boolean; value?: Array<{ name: string; version?: string; installed: boolean; enabled: boolean }> }> } | undefined
       if (!manager) return false
@@ -403,6 +440,8 @@ function SatelliteRoutesSection(
   const [state, setState] = useState<'idle' | 'busy' | 'saved' | 'failed'>('idle')
   const [models, setModels] = useState<CatalogState>({ status: 'loading' })
   const [catalogAgain, setCatalogAgain] = useState(0)
+  const [roles, setRoles] = useState<RolesState>({ status: 'loading' })
+  const [rolesAgain, setRolesAgain] = useState(0)
   const [compatible, setCompatible] = useState<boolean | undefined>()
   const [compatAgain, setCompatAgain] = useState(0)
   const mounted = useRef(false)
@@ -447,6 +486,18 @@ function SatelliteRoutesSection(
   }, [catalog, served, catalogAgain])
 
   useEffect(() => {
+    if (!served) return undefined
+    let live = true
+    setRoles({ status: 'loading' })
+    void surface.readRoles().then((raw) => {
+      if (!live) return
+      const catalog = parseRoleCatalog(raw)
+      setRoles(catalog ? { status: 'ready', catalog } : { status: 'error' })
+    }, () => { if (live) setRoles({ status: 'error' }) })
+    return () => { live = false }
+  }, [surface, served, rolesAgain])
+
+  useEffect(() => {
     let live = true
     setCompatible(undefined)
     void surface.compatible().then((ok) => { if (live) setCompatible(ok) }, () => { if (live) setCompatible(false) })
@@ -482,10 +533,11 @@ function SatelliteRoutesSection(
   const groups = models.status === 'ready' ? models.groups : []
   const selectable = models.status !== 'error'
   // 目录就绪时把手上的行规范到目录内：目录外的当前值按未配置显示，也按未配置保存。
-  const baseRows = draft ?? initialRows(snapshot ?? {})
-  const rows = models.status === 'ready' ? normalizeRows(baseRows, groups) : baseRows
-  // `declaredRoles` 这个键本身在不在：不在就说明行声明清单还没生效，页面要明说（不画空表）。
-  const declaresRoles = 'declaredRoles' in values
+  const roleCatalog = roles.status === 'ready' ? roles.catalog : undefined
+  const baseRows = draft ?? initialRows(snapshot ?? {}, roleCatalog)
+  const rows = models.status === 'ready' ? normalizeRows(baseRows, groups, roleCatalog) : baseRows
+  const roleDefinition = (role: string) => roleCatalog?.roles.find((entry) => entry.role === role)
+  const metadataReady = roleCatalog !== undefined
   const modelIds = (provider: string) =>
     (groups.find((group) => group.id === provider)?.models ?? []).map((model) => model.id)
 
@@ -494,7 +546,7 @@ function SatelliteRoutesSection(
     setDraft(next)
     if (state !== 'idle') setState('idle')
   }
-  const update = (index: number, field: 'role' | 'provider' | 'model', value: string) =>
+  const update = (index: number, field: 'provider' | 'model', value: string) =>
     edit(baseRows.map((row, i) => {
       if (i !== index) return row
       if (field !== 'provider') return { ...row, [field]: value, explicit: true }
@@ -502,8 +554,12 @@ function SatelliteRoutesSection(
       const kept = row.model !== '' && modelIds(value).includes(row.model)
       return { ...row, provider: value, model: kept ? row.model : '', explicit: true }
     }))
-  const add = () => edit([...baseRows, { role: '', provider: '', model: '', declared: false, added: true, explicit: true }])
-  const remove = (index: number) => edit(baseRows.filter((_, i) => i !== index))
+  const remove = (index: number) => {
+    const row = baseRows[index]
+    if (!metadataReady || busy || !row?.explicit || roleDefinition(row.role)) return
+    // Staged cleanup only touches routes on Save; ordinary role configuration is never mutated.
+    edit(baseRows.filter((_, i) => i !== index))
+  }
   const discard = () => {
     setDraft(undefined)
     draftRevision.current = undefined
@@ -512,12 +568,24 @@ function SatelliteRoutesSection(
 
   const roleKeys = baseRows.map((row) => row.role.trim()).filter(Boolean)
   const duplicate = new Set(roleKeys).size !== roleKeys.length
-  const payloadRows = models.status === 'ready' && !models.partial ? normalizeRows(baseRows, groups) : baseRows
+  const payloadRows = models.status === 'ready' && !models.partial ? normalizeRows(baseRows, groups, roleCatalog) : baseRows
   const clearedRoles = baseRows.filter((row, index) => row.explicit && row.provider && row.model
     && (!payloadRows[index]?.provider || !payloadRows[index]?.model)).map((row) => row.role)
-  const payload = (): RouteEntry[] => payloadRows
-    .filter((row) => row.explicit && row.role.trim() && row.provider.trim() && row.model.trim())
-    .map(({ original, role, provider, model }) => ({ ...original, role: role.trim(), provider: provider.trim(), model: model.trim() }))
+  const payload = (): RouteEntry[] => {
+    const changed = payloadRows
+      .filter((row) => roleDefinition(row.role) && row.explicit && row.provider.trim() && row.model.trim())
+      .map(({ original, role, provider, model }) => ({ ...original, role, provider: provider.trim(), model: model.trim() }))
+    const pending = new Map(changed.map((route) => [route.role, route]))
+    // Retain untouched orphan records verbatim, including whitespace and unknown advanced fields.
+    // Iterate original records to keep their order (and any legacy duplicate records) intact.
+    const result = routeEntries(snapshot?.user ?? {}).flatMap((original) => {
+      if (!roleDefinition(original.role)) return baseRows.some((row) => row.role === original.role) ? [original] : []
+      const route = pending.get(original.role)
+      pending.delete(original.role)
+      return route ? [route] : []
+    })
+    return [...result, ...pending.values()]
+  }
   const reset = (index: number) => edit(baseRows.map((row, i) => {
     if (i !== index) return row
     const inherited = routeEntries(snapshot?.base ?? {}).find((entry) => entry.role === row.role)
@@ -572,9 +640,11 @@ function SatelliteRoutesSection(
 
   return <div className="satellite-ui">
     {header}
-    {declaresRoles
-      ? null
-      : <p className="satellite-ui__notice" data-state="missing" role="status">{t('declaredMissing')}</p>}
+    <div className="satellite-ui__catalog" data-state={roles.status}>
+      {roles.status !== 'ready' ? <p className="satellite-ui__notice" data-state="missing" role="status">{t(roles.status === 'loading' ? 'rolesLoading' : 'rolesUnavailable')}</p> : null}
+      <button className="satellite-ui__button" type="button" disabled={busy || roles.status === 'loading'}
+        onClick={() => setRolesAgain((count) => count + 1)}>{t('retryRoles')}</button>
+    </div>
     <div className="satellite-ui__catalog" data-state={models.status}>
       {catalogNotice}
       {clearedRoles.length ? <p role="status">{t('catalogClears')} {clearedRoles.join(', ')}</p> : null}
@@ -592,7 +662,7 @@ function SatelliteRoutesSection(
           <th className="satellite-ui__head" scope="col">{t('provider')}</th>
           <th className="satellite-ui__head" scope="col">{t('model')}</th>
           <th className="satellite-ui__head" scope="col">{t('origin')}</th>
-          <th className="satellite-ui__head" scope="col">{t('remove')}</th>
+          <th className="satellite-ui__head" scope="col">{t('cleanup')}</th>
         </tr>
       </thead>
       <tbody>
@@ -600,24 +670,42 @@ function SatelliteRoutesSection(
           const field = (name: 'role' | 'provider' | 'model') => `${fresh}-${index}-${name}`
           const providers = providerOptions()
           const modelsForRow = modelOptions(row)
-          const origin = row.declared ? 'declared' : row.added ? 'added' : 'override'
-          const originLabel = row.declared ? t('originDeclared') : row.added ? t('originAdded') : t('originOverride')
+          const definition = roleDefinition(row.role)
+          const orphan = metadataReady && definition === undefined
+          const editable = definition !== undefined && !busy
+          const origin = !metadataReady ? 'unverified' : orphan ? 'orphan' : 'declared'
+          const originLabel = !metadataReady ? t('bindingsUnverified') : orphan ? t('orphan') : t('originDeclared')
           return <tr className="satellite-ui__row" data-state={origin} key={index}>
             <td className="satellite-ui__cell">
-              {row.declared
-                ? <span className="satellite-ui__role">{row.role}</span>
-                : <>
-                  <label className="satellite-ui__label" htmlFor={field('role')}>{t('role')}</label>
-                  <input className="satellite-ui__input" id={field('role')} value={row.role} placeholder={t('role')}
-                    spellCheck={false} autoComplete="off" disabled={busy}
-                    onChange={(event) => update(index, 'role', event.target.value)} />
-                </>}
+              <span className="satellite-ui__role">{definition?.label ?? row.role}</span>
+              {definition ? <>
+                <code className="satellite-ui__role-id">{row.role}</code>
+                <p className="satellite-ui__description">{definition.description}</p>
+                <details className="satellite-ui__details">
+                  <summary>{t('roleDetails')}</summary>
+                  <p className="satellite-ui__notice">{t('roleScopeNotice')}</p>
+                  <dl className="satellite-ui__metadata">
+                    <dt>{t('skill')}</dt><dd>{definition.skill ?? t('notProvided')}</dd>
+                    <dt>{t('sandbox')}</dt><dd><code>{definition.sandbox}</code></dd>
+                  </dl>
+                  {definition.bindings.length === 0 ? <p className="satellite-ui__notice">{t('noBindings')}</p> :
+                    <ul className="satellite-ui__bindings">{definition.bindings.map((binding, bindingIndex) => <li key={bindingIndex}>
+                      <strong>{binding.node} · {binding.phase}</strong>
+                      <dl className="satellite-ui__metadata">
+                        {binding.extension !== undefined ? <><dt>{t('extension')}</dt><dd>{binding.extension}</dd></> : null}
+                        {binding.skill !== undefined ? <><dt>{t('skill')}</dt><dd>{binding.skill}</dd></> : null}
+                        {binding.objective !== undefined ? <><dt>{t('objective')}</dt><dd>{binding.objective}</dd></> : null}
+                        <dt>{t('condition')}</dt><dd><code>{binding.condition}</code></dd>
+                      </dl>
+                    </li>)}</ul>}
+                </details>
+              </> : <p className="satellite-ui__notice" data-state="missing">{originLabel}</p>}
             </td>
             <td className="satellite-ui__cell">
               <label className="satellite-ui__label" htmlFor={field('provider')}>{t('provider')}</label>
-              {selectable
+              {!definition ? <span className="satellite-ui__raw-model">{row.provider || t('unset')}</span> : selectable
                 ? <select className="satellite-ui__input satellite-ui__select" id={field('provider')}
-                    value={row.provider} disabled={busy || models.status === 'loading'}
+                    value={row.provider} disabled={!editable || models.status === 'loading'}
                     onChange={(event) => update(index, 'provider', event.target.value)}>
                     {providers.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
@@ -627,9 +715,9 @@ function SatelliteRoutesSection(
             </td>
             <td className="satellite-ui__cell">
               <label className="satellite-ui__label" htmlFor={field('model')}>{t('model')}</label>
-              {selectable
+              {!definition ? <span className="satellite-ui__raw-model">{row.model || t('unset')}</span> : selectable
                 ? <select className="satellite-ui__input satellite-ui__select" id={field('model')}
-                    value={row.model} disabled={busy || models.status === 'loading'}
+                    value={row.model} disabled={!editable || models.status === 'loading'}
                     onChange={(event) => update(index, 'model', event.target.value)}>
                     {modelsForRow.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
@@ -639,23 +727,22 @@ function SatelliteRoutesSection(
             </td>
             <td className="satellite-ui__cell">
               <span className="satellite-ui__badge" data-state={origin}>{originLabel} · {row.explicit ? t('originOverride') : routeEntries(snapshot.base ?? {}).some((entry) => entry.role === row.role) ? t('inherited') : t('deploymentDefault')}</span>
-              {row.explicit ? <button className="satellite-ui__button" type="button" disabled={busy} onClick={() => reset(index)}>{t('inherit')}</button> : null}
+              {definition && row.explicit ? <button className="satellite-ui__button" type="button" disabled={busy} onClick={() => reset(index)}>{t('inherit')}</button> : null}
             </td>
             <td className="satellite-ui__cell">
-              {row.declared
-                ? <span className="satellite-ui__badge" data-state="fixed">{t('fixed')}</span>
-                : <button className="satellite-ui__button satellite-ui__button--quiet" type="button" disabled={busy}
-                    aria-label={`${t('remove')} ${row.role || index + 1}`}
-                    onClick={() => remove(index)}>{t('remove')}</button>}
+              {orphan && row.explicit
+                ? <button className="satellite-ui__button satellite-ui__button--quiet" type="button" disabled={busy}
+                    aria-label={`${t('cleanup')} ${row.role}`}
+                    onClick={() => remove(index)}>{t('cleanup')}</button>
+                : definition ? <span className="satellite-ui__badge" data-state="fixed">{t('fixed')}</span> : null}
             </td>
           </tr>
         })}
       </tbody>
     </table>
     <div className="satellite-ui__actions">
-      <button className="satellite-ui__button satellite-ui__button--primary" type="button" disabled={busy || duplicate || snapshot?.writable !== true || models.status === 'loading'}
-        onClick={() => { if (!duplicate) void write(payload(), draft === undefined ? snapshot?.revision : draftRevision.current) }}>{busy ? t('saving') : t('save')}</button>
-      <button className="satellite-ui__button" type="button" disabled={busy} onClick={add}>{t('add')}</button>
+      <button className="satellite-ui__button satellite-ui__button--primary" type="button" disabled={busy || !metadataReady || duplicate || snapshot?.writable !== true || models.status === 'loading'}
+        onClick={() => { if (metadataReady && !busy && models.status !== 'loading' && !duplicate) void write(payload(), draft === undefined ? snapshot?.revision : draftRevision.current) }}>{busy ? t('saving') : t('save')}</button>
       <button className="satellite-ui__button" type="button" disabled={busy || draft === undefined}
         onClick={discard}>{t('discard')}</button>
       {duplicate ? <span role="alert">{t('duplicate')}</span> : null}
