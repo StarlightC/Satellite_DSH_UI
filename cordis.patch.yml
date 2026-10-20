@@ -1,0 +1,5 @@
+# 界面插件：可选安装。功能本身（插槽服务、节点工具、领域扩展）由主插件 `satellite` 提供；
+# 这一行是浏览器半边的挂载点，specifier 恰为裸包名，因此它的展示元数据来自本包自己的 locale。
+- insert:
+    - id: satellite-ui
+      name: 'satellite-ui'

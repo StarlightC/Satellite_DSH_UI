@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Satellite settings UI",
+    "description": "Optional UI plugin for Satellite: pick the provider and model for each role on the settings page. Requires the satellite plugin >=0.1.0 <0.2.0."
+  }
+}

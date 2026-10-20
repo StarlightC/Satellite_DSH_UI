@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Satellite 配置界面",
+    "description": "Satellite 的界面插件（可选）：在设置页里配置各角色的 provider 与 model。需要功能插件 satellite >=0.1.0 <0.2.0。"
+  }
+}
