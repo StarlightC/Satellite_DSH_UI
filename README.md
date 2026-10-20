@@ -6,15 +6,14 @@ package.
 ## Scope and requirements
 
 - Node.js `^22.19.0 || >=24.0.0`.
-- Installed, enabled `satellite` at a stable version `>=0.1.0 <0.2.0`. This is a
-  **required** peer, not an optional one: the Host half refuses to load when the
-  functional plugin is missing or outside the range, so `satellite` has to be
-  resolvable wherever this package is installed (same profile, or the registry).
+- Installed, enabled `satellite` at a stable version `>=0.1.0 <0.2.0`. Install the
+  functional plugin from its GitHub repository first: it is not distributed through npm.
+  It is required at runtime: the Host half refuses to load when `satellite` is missing or
+  outside the range, so it has to be resolvable wherever this package is installed.
 - Changes affect **the entire current profile**, not just the open project.
 
-Because the peer is required, a standalone install of this package needs the functional
-plugin published (or linked into the same profile) first; the functional plugin itself
-does not require this package, so the release order is functional plugin → UI.
+Install the functional plugin from GitHub before this package; the functional plugin does
+not require this package, so the release order is functional plugin → UI.
 
 Install through the Harness **Plugins** page. The page is mounted only while the
 functional `satellite-node` settings namespace is served. Unknown, unavailable,

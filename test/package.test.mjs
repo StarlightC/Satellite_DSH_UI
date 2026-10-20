@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 /** 本包根目录（test/ 的上一级）。 */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'))
 
 /** npm 生命周期钩子：本包只用于安装到 profile，不允许在安装时执行代码。 */
 const HOOKS = [
@@ -43,9 +44,20 @@ test('dsh 依赖：devDependencies 钉死版本，peerDependencies 用区间', (
     assert.doesNotMatch(String(range), /^\d+\.\d+\.\d+$/, `${name}@${range} 不应钉死单版本`)
   }
   assert.equal(manifest.peerDependencies?.satellite, MAIN_RANGE)
-  // 宿主半边在主插件缺失时直接拒绝加载，所以它**不能**被标成 optional peer：
-  // 那样包管理器不会要求安装，矛盾只会在运行期以“一行 failed”暴露。
-  assert.notEqual(manifest.peerDependenciesMeta?.satellite?.optional, true, 'satellite 必须是必需 peer')
+  // `satellite` 由 GitHub 分发、不在 npm 上：标记为 optional peer 只让安装可缺省，
+  // 运行时 Host 半边仍强制校验，缺失或越界都会拒绝加载。
+  assert.equal(manifest.peerDependenciesMeta?.satellite?.optional, true, 'satellite 应为 optional peer（安装可缺省，运行时必需）')
+  // 其他 peer 保持必需，不能被顺手标成 optional。
+  for (const name of Object.keys(manifest.peerDependencies ?? {})) {
+    if (name === 'satellite') continue
+    assert.notEqual(manifest.peerDependenciesMeta?.[name]?.optional, true, `${name} 必须是必需 peer`)
+  }
+  // manifest 与 lock 根条目的 peer 元数据须一致，两处声明不能相互背离。
+  assert.deepEqual(
+    manifest.peerDependenciesMeta ?? {},
+    lock.packages?.['']?.peerDependenciesMeta ?? {},
+    'package.json 与 package-lock.json 根 peerDependenciesMeta 必须一致',
+  )
   // 每个 dsh 运行时依赖都要同时出现在 peer 与 dev 里，且版本可对齐。
   for (const name of Object.keys(dev).filter((entry) => entry.startsWith('@deepseek-ai/'))) {
     assert.ok(manifest.peerDependencies?.[name] !== undefined, `${name} 缺少 peer 声明`)

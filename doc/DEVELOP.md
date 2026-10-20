@@ -119,9 +119,13 @@ from this workspace: no initialization, push, tag or release is performed here.
 ## Version range
 
 `SUPPORTED_MAIN_RANGE` in `src/index.ts` must stay in sync with the `satellite` entry in
-`peerDependencies`. That entry is a **required** peer (no `peerDependenciesMeta`): the Host
-half throws when it resolves no version, so an install without the functional plugin fails
-at load rather than degrading. In this checkout both packages are linked into the same
-profile, which satisfies the peer locally; publishing must go functional plugin first. The version lookup tries, in order: this package's own location, the sibling
+`peerDependencies`. `satellite` is the only optional peer (`peerDependenciesMeta`): it is
+distributed from GitHub rather than npm, so `npm ci` must not require it, while the Host
+half still throws when it resolves no version — an install without the functional plugin
+fails at load rather than degrading. The root `peerDependenciesMeta` in
+`package-lock.json` must match `package.json`; `test/package.test.mjs` asserts that
+consistency so `npm ci` and the manifest cannot drift. In this checkout both packages are
+linked into the same profile, which satisfies the runtime peer locally; publishing must go
+functional plugin first. The version lookup tries, in order: this package's own location, the sibling
 directory `../satellite` in a checkout, and `DSH_PROFILE_DIR` (needed when the profile links the
 package instead of installing it).

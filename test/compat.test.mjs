@@ -1,7 +1,35 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { SUPPORTED_MAIN_RANGE, readMainVersion, satisfiesRange } from '../lib/index.js'
+
+/**
+ * 在临时 profile 里放一个受控的 `satellite` 版本，并临时指向 `DSH_PROFILE_DIR`。
+ *
+ * `readMainVersion` 在 `DSH_PROFILE_DIR` 存在时只从该 profile 解析，因此结果不依赖
+ * 开发机的兄弟目录或已安装插件；无论断言成败，fixture 与环境变量都会还原。
+ */
+async function withProfileFixture(version, run) {
+  const dir = await mkdtemp(join(tmpdir(), 'satellite-ui-compat-'))
+  const previous = process.env.DSH_PROFILE_DIR
+  try {
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'test-profile', version: '0.0.0' }))
+    if (version !== undefined) {
+      const satelliteDir = join(dir, 'node_modules', 'satellite')
+      await mkdir(satelliteDir, { recursive: true })
+      await writeFile(join(satelliteDir, 'package.json'), JSON.stringify({ name: 'satellite', version }))
+    }
+    process.env.DSH_PROFILE_DIR = dir
+    await run()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_PROFILE_DIR
+    else process.env.DSH_PROFILE_DIR = previous
+    await rm(dir, { recursive: true, force: true })
+  }
+}
 
 test('默认支持范围是 >=0.1.0 <0.2.0', () => {
   assert.equal(SUPPORTED_MAIN_RANGE, '>=0.1.0 <0.2.0')
@@ -38,15 +66,24 @@ test('空区间与非法子句失败关闭', () => {
   assert.equal(satisfiesRange('9.9.9', '   '), false)
 })
 
-test('readMainVersion 能从仓库兄弟目录解析出主插件版本', () => {
-  // test/ 的上一级是包根，包根的同级目录就是主插件 satellite。
-  assert.equal(readMainVersion(), '0.1.0')
+test('readMainVersion 从受控 profile 读取主插件版本', async () => {
+  await withProfileFixture('0.1.7', () => {
+    assert.equal(readMainVersion(), '0.1.7')
+    assert.equal(satisfiesRange('0.1.7'), true)
+  })
 })
 
-test('解析到的主插件版本落在支持范围内', () => {
-  const version = readMainVersion()
-  assert.ok(version !== undefined, '开发布局下应能读到 satellite/package.json')
-  assert.equal(satisfiesRange(version), true, String(version))
+test('readMainVersion 读取不兼容版本，由支持范围守卫拒绝', async () => {
+  await withProfileFixture('0.2.0', () => {
+    assert.equal(readMainVersion(), '0.2.0')
+    assert.equal(satisfiesRange('0.2.0'), false)
+  })
+})
+
+test('readMainVersion 在 profile 没有主插件时返回 undefined', async () => {
+  await withProfileFixture(undefined, () => {
+    assert.equal(readMainVersion(), undefined)
+  })
 })
 
 test('invalid versions and ranges fail closed', () => {
