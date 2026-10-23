@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { access, readFile, readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -105,4 +106,31 @@ test('cordis.patch.yml 以裸包名挂载浏览器半边', async () => {
   const patch = await readFile(join(root, manifest.dsh.bundle.patch), 'utf8')
   assert.match(patch, /id: satellite-ui/)
   assert.match(patch, /name: 'satellite-ui'/)
+})
+
+/** 插件清单展示名：与功能插件同名（Satellite），界面身份由 "UI" 后缀区分。 */
+const PACKAGE_TITLE = 'Satellite UI'
+
+/** 官方图标指纹：本包图标须与 satellite 插件逐字节一致，避免两处品牌漂移。 */
+const ICON_SHA256 = '98755ad3099f68e8db4c5997b5300956b8f4052fcdaea5d6d8599b2c55b008d7'
+
+test('locale 的 meta.title 统一为 Satellite UI', async () => {
+  for (const lang of ['zh', 'en']) {
+    const dict = JSON.parse(await readFile(join(root, 'locale', `${lang}.json`), 'utf8'))
+    assert.equal(dict.meta?.title, PACKAGE_TITLE, `${lang}.json meta.title`)
+  }
+})
+
+test('icon.svg 与官方图标指纹一致，且自包含、使用固定品牌色', async () => {
+  const svg = await readFile(join(root, 'icon.svg'))
+  assert.equal(createHash('sha256').update(svg).digest('hex'), ICON_SHA256, 'icon.svg 指纹')
+  const text = svg.toString('utf8')
+  // 固定品牌色：背景 #101828、轨道线 #8FB8FF、星体填充 #4C8DFF。
+  for (const color of ['#101828', '#8FB8FF', '#4C8DFF']) {
+    assert.ok(text.includes(color), `缺少品牌色 ${color}`)
+  }
+  // 自包含：不继承宿主主题色（currentColor），不引用外部资源。
+  assert.ok(!text.includes('currentColor'), '不应依赖 currentColor')
+  assert.doesNotMatch(text, /(?:xlink:)?href=|<image|<use|url\(/, '不应引用外部资源')
+  assert.match(text, /viewBox="0 0 24 24"/, '应为 24×24 视口')
 })
