@@ -31,18 +31,18 @@ async function withProfileFixture(version, run) {
   }
 }
 
-test('默认支持范围是 >=0.1.0 <0.2.0', () => {
-  assert.equal(SUPPORTED_MAIN_RANGE, '>=0.1.0 <0.2.0')
+test('默认支持范围是 >=0.2.0 <0.3.0', () => {
+  assert.equal(SUPPORTED_MAIN_RANGE, '>=0.2.0 <0.3.0')
 })
 
 test('范围内的版本通过', () => {
-  for (const version of ['0.1.0', '0.1.5', '0.1.99']) {
+  for (const version of ['0.2.0', '0.2.5', '0.2.99']) {
     assert.equal(satisfiesRange(version), true, version)
   }
 })
 
 test('越界、过低与非法版本被拒绝', () => {
-  for (const version of ['0.2.0', '0.3.1', '1.0.0', '0.0.9', '', 'abc', undefined, null]) {
+  for (const version of ['0.1.0', '0.1.99', '0.3.0', '0.3.1', '1.0.0', '0.0.9', '', 'abc', undefined, null]) {
     assert.equal(satisfiesRange(version), false, String(version))
   }
 })
@@ -56,9 +56,9 @@ test('支持自定义比较子句', () => {
 })
 
 test('拒绝预发布与非法版本，仅接受稳定版本', () => {
-  assert.equal(satisfiesRange('0.1.0-beta.1'), false)
-  assert.equal(satisfiesRange('v0.1.2'), false) // v 前缀不是本实现支持的形状
-  assert.equal(satisfiesRange('0.1', undefined), false)
+  assert.equal(satisfiesRange('0.2.0-beta.1'), false)
+  assert.equal(satisfiesRange('v0.2.0'), false) // v 前缀不是本实现支持的形状
+  assert.equal(satisfiesRange('0.2', undefined), false)
 })
 
 test('空区间与非法子句失败关闭', () => {
@@ -67,16 +67,16 @@ test('空区间与非法子句失败关闭', () => {
 })
 
 test('readMainVersion 从受控 profile 读取主插件版本', async () => {
-  await withProfileFixture('0.1.7', () => {
-    assert.equal(readMainVersion(), '0.1.7')
-    assert.equal(satisfiesRange('0.1.7'), true)
+  await withProfileFixture('0.2.7', () => {
+    assert.equal(readMainVersion(), '0.2.7')
+    assert.equal(satisfiesRange('0.2.7'), true)
   })
 })
 
 test('readMainVersion 读取不兼容版本，由支持范围守卫拒绝', async () => {
-  await withProfileFixture('0.2.0', () => {
-    assert.equal(readMainVersion(), '0.2.0')
-    assert.equal(satisfiesRange('0.2.0'), false)
+  await withProfileFixture('0.3.0', () => {
+    assert.equal(readMainVersion(), '0.3.0')
+    assert.equal(satisfiesRange('0.3.0'), false)
   })
 })
 
@@ -88,6 +88,6 @@ test('readMainVersion 在 profile 没有主插件时返回 undefined', async () 
 
 test('invalid versions and ranges fail closed', () => {
   for (const v of ['0.1.0garbage', '00.1.0', '0.1.01', '0.1.0-beta.2', '99999999999999999.1.0']) assert.equal(satisfiesRange(v), false)
-  for (const r of ['*', '^0.1.0', '>=0.1.0 garbage']) assert.equal(satisfiesRange('0.1.0', r), false)
-  assert.equal(satisfiesRange('0.1.0+build.1'), true)
+  for (const r of ['*', '^0.2.0', '>=0.2.0 garbage']) assert.equal(satisfiesRange('0.2.0', r), false)
+  assert.equal(satisfiesRange('0.2.0+build.1'), true)
 })

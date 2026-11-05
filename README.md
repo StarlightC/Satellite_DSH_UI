@@ -5,12 +5,19 @@ package.
 
 ## Scope and requirements
 
-- Node.js `^22.19.0 || >=24.0.0`.
-- Installed, enabled `satellite` at a stable version `>=0.1.0 <0.2.0`. Install the
+- Node.js `>=24.9.0`; `engines.dsh` pins this UI to Harness `0.2.2-alpha.3`.
+- Installed, enabled `satellite` at a stable version `>=0.2.0 <0.3.0`. Older `0.1.x`
+  releases are not supported. Install the
   functional plugin from its GitHub repository first: it is not distributed through npm.
   It is required at runtime: the Host half refuses to load when `satellite` is missing or
   outside the range, so it has to be resolvable wherever this package is installed.
 - Changes affect **the entire current profile**, not just the open project.
+
+This UI 0.2.0 release targets the Harness `0.2.2-alpha.3` source build at commit
+`8bd0733` together with the `satellite` 0.2.x line. An npm prerelease carrying the same
+version number may expose different interfaces; only the contract checked against that
+source checkout is claimed. The release has not yet been installation-verified in a
+profile: type/build and headless contract checks are not a live settings-page acceptance.
 
 Install the functional plugin from GitHub before this package; the functional plugin does
 not require this package, so the release order is functional plugin → UI.
@@ -49,7 +56,7 @@ Inherited deployment defaults are not deleted by profile cleanup.
 
 The page mounts the native Typert Remote `satelliteRoles.describe()` contribution
 and validates its versioned JSON response; it adds no HTTP server or custom transport.
-This no-argument `src-json` result path targets the Host `0.2.1-alpha.2` public contract,
+This no-argument `src-json` result path targets the Host `0.2.2-alpha.3` public contract,
 not a generated strict result codec. Role descriptions reload when opening the page or
 using **Reload role descriptions**; extension changes are not pushed live. Update both
 packages together: an older functional plugin without this service remains read-only.

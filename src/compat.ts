@@ -1,5 +1,5 @@
 /** Supported stable Satellite releases; shared by Host and browser checks. */
-export const SUPPORTED_MAIN_RANGE = '>=0.1.0 <0.2.0'
+export const SUPPORTED_MAIN_RANGE = '>=0.2.0 <0.3.0'
 
 /** Strict comparator ranges only. Invalid clauses and prereleases fail closed. */
 export function satisfiesRange(version: unknown, range = SUPPORTED_MAIN_RANGE): boolean {

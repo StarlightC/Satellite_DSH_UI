@@ -17,7 +17,7 @@ const HOOKS = [
 ]
 
 /** 与功能插件 `satellite` 同版本区间；两处必须一致，否则界面与功能会错配。 */
-const MAIN_RANGE = '>=0.1.0 <0.2.0'
+const MAIN_RANGE = '>=0.2.0 <0.3.0'
 
 test('不声明任何安装/发布生命周期钩子', () => {
   for (const hook of HOOKS) {

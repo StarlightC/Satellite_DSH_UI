@@ -17,7 +17,7 @@ export const en = {
   layeredRoutes: 'Editing is disabled: a lower deployment layer customizes routes. Arrays replace across layers rather than merge by role, so this sparse editor cannot preserve that configuration. Edit the deployment composition instead. Any existing draft is preserved.',
   defaultsUnavailable: 'Editing is disabled because the inherited routes or their code schema defaults cannot be verified. Wait for settings to reconnect, or check the functional plugin and deployment. Any existing draft is preserved.',
   compatLoading: 'Checking the installed Satellite version…',
-  compatFailed: 'Satellite must be installed and enabled at a stable version >=0.1.0 <0.2.0. Version lookup failed or the installed version is unsupported; editing is disabled.',
+  compatFailed: 'Satellite must be installed and enabled at a stable version >=0.2.0 <0.3.0. Version lookup failed or the installed version is unsupported; editing is disabled.',
   retryCompatibility: 'Check compatibility again',
   inherit: 'Follow default',
   duplicate: 'Role names must be unique.',
@@ -50,7 +50,7 @@ export const en = {
   failed: 'Save was rejected or the settings changed elsewhere. Your draft is preserved; discard it to reload the latest values before retrying.',
   readOnly: 'This deployment stores settings read-only.',
   unsupported:
-    'The satellite plugin config is served, but it has none of the fields this page drives (routes/roles), so the installed satellite is probably outside the supported range >=0.1.0 <0.2.0.',
+    'The satellite plugin config is served, but it has none of the fields this page drives (routes/roles), so the installed satellite is probably outside the supported range >=0.2.0 <0.3.0.',
   // Android 执行设置（独立的一节）。
   pageRoles: 'Roles',
   pageAndroid: 'Android execution',
@@ -105,7 +105,7 @@ export const zh: Record<keyof typeof en, string> = {
   layeredRoutes: '已禁止编辑：下层部署自定义了 routes。数组跨层整段替换，不会逐角色合并，此稀疏编辑器无法无损保存。请修改部署装配；已有草稿仍保留。',
   defaultsUnavailable: '无法核验继承路由或代码 schema 默认值，已禁止编辑。请等待设置重新连接，或检查功能插件与部署；已有草稿仍保留。',
   compatLoading: '正在核对已安装的 Satellite 版本…',
-  compatFailed: '需要已安装并启用的 Satellite 稳定版本 >=0.1.0 <0.2.0。无法读取版本或版本不兼容，已停止编辑。',
+  compatFailed: '需要已安装并启用的 Satellite 稳定版本 >=0.2.0 <0.3.0。无法读取版本或版本不兼容，已停止编辑。',
   retryCompatibility: '重新核对兼容性',
   inherit: '跟随默认',
   duplicate: '角色名不可重复。',
@@ -138,7 +138,7 @@ export const zh: Record<keyof typeof en, string> = {
   failed: '保存被拒绝，或设置已被其他操作更改。草稿已保留；可放弃修改以读取最新值，再重试。',
   readOnly: '本部署的设置为只读。',
   unsupported:
-    '主插件的设置已被服务，但其中没有本页依赖的配置字段（routes/roles）；当前安装的 satellite 可能不在支持范围 >=0.1.0 <0.2.0 内。',
+    '主插件的设置已被服务，但其中没有本页依赖的配置字段（routes/roles）；当前安装的 satellite 可能不在支持范围 >=0.2.0 <0.3.0 内。',
   pageRoles: '插件角色',
   pageAndroid: 'Android 执行',
   tabsLabel: 'Satellite 设置页',

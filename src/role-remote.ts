@@ -1,7 +1,7 @@
 /** Read-only role catalogue on the Host's existing native Remote carrier. */
 import type { Context } from '@deepseek-ai/cordis'
 
-// Public TypertRemoteContribution shape (Host 0.2.1-alpha.2). No generated strict
+// Public TypertRemoteContribution shape (Host 0.2.2-alpha.3). No generated strict
 // result codec is claimed: the caller validates the versioned JSON catalogue.
 export const ROLE_REMOTE = {
   package: 'satellite',

@@ -93,7 +93,7 @@ function host({ configForms, remote } = {}) {
       if (name === 'settingsSchema') return schemaService
       if (name === 'remote.satelliteRoles') return remote?.satelliteRoles
       if (name === 'remote') return remote
-      if (name === 'remote.pluginManager') return remote?.pluginManager ?? { listBundles: async () => ({ ok: true, value: [{ name: 'satellite', version: '0.1.0', installed: true, enabled: true }] }) }
+      if (name === 'remote.pluginManager') return remote?.pluginManager ?? { listBundles: async () => ({ ok: true, value: [{ name: 'satellite', version: '0.2.0', installed: true, enabled: true }] }) }
       return undefined
     },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -893,23 +893,23 @@ test('loading and unavailable settings are not reported as version errors', asyn
 
 test('real installed bundle version gates the editor, with retry after lookup failure', async () => {
   const state = settingsHost(DEFAULT_VALUE)
-  let version = '0.2.0'
+  let version = '0.1.1'
   const remote = { ...catalogRemote, pluginManager: { listBundles: async () => ({ ok: true, value: [{ name: 'satellite', installed: true, enabled: true, version }] }) } }
   const app = await mount({ configForms: state.configForms, remote })
   assert.equal(roleCards(app.tree()).length, 0)
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
-  version = '0.1.1'
+  version = '0.2.0'
   buttonByText(app.tree(), 'satellite-ui:retryCompatibility').props.onClick()
   await tick()
   assert.ok(roleCards(app.tree()).length > 0)
   findAll(app.tree(), 'select')[1].props.onChange({ target: { value: 'deepseek-v4-pro' } })
-  version = '0.1.1-beta.1'
+  version = '0.2.0-beta.1'
   buttonByText(app.tree(), 'satellite-ui:save').props.onClick()
   await tick()
   assert.equal(state.writes.length, 0, 'save rechecks version')
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
   assert.equal(roleCards(app.tree()).length, 0)
-  version = '0.1.1'
+  version = '0.2.0'
   buttonByText(app.tree(), 'satellite-ui:retryCompatibility').props.onClick()
   await tick()
   assert.equal(findAll(app.tree(), 'select')[1].props.value, 'deepseek-v4-pro')
@@ -921,7 +921,7 @@ test('offline version lookup blocks editing and retries without any settings wri
   let offline = true
   const remote = { ...catalogRemote, pluginManager: { listBundles: async () => {
     if (offline) throw new Error('offline')
-    return { ok: true, value: [{ name: 'satellite', version: '0.1.0', installed: true, enabled: true }] }
+    return { ok: true, value: [{ name: 'satellite', version: '0.2.0', installed: true, enabled: true }] }
   } } }
   const app = await mount({ configForms: state.configForms, remote })
   assert.ok(text(app.tree()).includes('satellite-ui:compatFailed'))
