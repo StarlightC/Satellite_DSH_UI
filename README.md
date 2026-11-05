@@ -5,7 +5,7 @@ package.
 
 ## Scope and requirements
 
-- Node.js `>=24.9.0`; `engines.dsh` pins this UI to Harness `0.2.2-alpha.3`.
+- Node.js `>=24.9.0`; the Harness installation range is `>=0.2.2-alpha.3 <0.3.0`, including `0.2.2-rc.1`. It is not pinned to a single host version or source commit.
 - Installed, enabled `satellite` at a stable version `>=0.2.0 <0.3.0`. Older `0.1.x`
   releases are not supported. Install the
   functional plugin from its GitHub repository first: it is not distributed through npm.
@@ -13,11 +13,13 @@ package.
   outside the range, so it has to be resolvable wherever this package is installed.
 - Changes affect **the entire current profile**, not just the open project.
 
-This UI 0.2.0 release targets the Harness `0.2.2-alpha.3` source build at commit
-`8bd0733` together with the `satellite` 0.2.x line. An npm prerelease carrying the same
-version number may expose different interfaces; only the contract checked against that
-source checkout is claimed. The release has not yet been installation-verified in a
-profile: type/build and headless contract checks are not a live settings-page acceptance.
+The type/build and headless contract checks for this UI 0.2.0 release used the
+Harness `0.2.2-alpha.3` source build at commit `8bd0733` and the `satellite` 0.2.x
+line as their validation baseline, not as an exclusive installation requirement.
+Other hosts within the installation range still need the required public interfaces;
+a matching version number alone does not prove API compatibility. Not every version
+in the range has been tested. The release has not yet been installation-verified in
+a profile: these checks are not a live settings-page acceptance.
 
 Install the functional plugin from GitHub before this package; the functional plugin does
 not require this package, so the release order is functional plugin → UI.
