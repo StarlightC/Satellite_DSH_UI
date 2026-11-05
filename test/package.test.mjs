@@ -19,6 +19,11 @@ const HOOKS = [
 /** 与功能插件 `satellite` 同版本区间；两处必须一致，否则界面与功能会错配。 */
 const MAIN_RANGE = '>=0.2.0 <0.3.0'
 
+test('宿主安装范围不锁定测试版本，且与锁文件一致', () => {
+  assert.equal(manifest.engines.dsh, '>=0.2.2-alpha.3 <0.3.0')
+  assert.equal(lock.packages[''].engines.dsh, manifest.engines.dsh)
+})
+
 test('不声明任何安装/发布生命周期钩子', () => {
   for (const hook of HOOKS) {
     assert.equal(manifest.scripts?.[hook], undefined, hook)
